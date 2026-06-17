@@ -23,6 +23,7 @@ import {
 import Login from "./components/Login.jsx";
 import HoldingForm from "./components/HoldingForm.jsx";
 import PromptBar from "./components/PromptBar.jsx";
+import { QRCodeSVG } from "qrcode.react";
 
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = loading
@@ -66,8 +67,11 @@ function Paywall({ user }) {
         </div>
         <div style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
           <div style={{ fontSize: 24, fontWeight: 800, fontFamily: T.mono, color: T.gold }}>{PAYWALL.price}</div>
-          <div style={{ color: T.muted, fontSize: 12.5, marginTop: 10, lineHeight: 1.6 }}>
-            Pay via UPI to<br />
+          <div style={{ background: "#fff", padding: 12, borderRadius: 10, display: "inline-block", margin: "14px 0 6px" }}>
+            <QRCodeSVG value={`upi://pay?pa=${PAYWALL.upi}&pn=Folio&am=99&cu=INR`} size={132} />
+          </div>
+          <div style={{ color: T.muted, fontSize: 12.5, marginTop: 8, lineHeight: 1.6 }}>
+            Scan to pay, or send to UPI ID<br />
             <span style={{ color: T.text, fontFamily: T.mono, fontSize: 14 }}>{PAYWALL.upi}</span>
           </div>
           <div style={{ color: T.faint, fontSize: 11.5, marginTop: 10 }}>{PAYWALL.note}</div>
