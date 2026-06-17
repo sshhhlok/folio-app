@@ -49,3 +49,36 @@ export async function saveSnapshot(userId, date, value) {
   if (error) throw error;
   return data;
 }
+
+/* ── profiles & subscription (paywall) ────────────────────────────── */
+export async function fetchMyProfile(userId) {
+  const { data, error } = await supabase
+    .from("profiles").select("*").eq("id", userId).single();
+  if (error) throw error;
+  return data;
+}
+
+// Admin-only calls go through the serverless /api/admin (service role).
+async function adminCall(body) {
+  const { data: { session } } = await supabase.auth.getSession();
+  const res = await fetch("/api/admin", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${session?.access_token || ""}`,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error((await res.json()).error || "admin error");
+  return res.json();
+}
+
+export async function listProfiles() {
+  const { users } = await adminCall({ action: "list" });
+  return users || [];
+}
+
+export async function setProfilePaid(userId, paid, days = 30) {
+  const { user } = await adminCall({ action: paid ? "activate" : "deactivate", userId, days });
+  return user;
+}

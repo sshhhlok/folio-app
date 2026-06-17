@@ -6,14 +6,16 @@ import {
 import {
   LayoutDashboard, ListOrdered, Plus, Pencil, Trash2, Save,
   LogOut, RefreshCw, X, PieChart as PieIcon, BarChart3, LineChart as LineIcon,
+  Users, Lock, Check, IndianRupee,
 } from "lucide-react";
 
-import { T, TIERS, PIE } from "./theme";
+import { T, TIERS, PIE, PAYWALL } from "./theme";
 import { supabase, configured } from "./supabaseClient";
 import { inr, inrShort, pct, num, today, withCalc } from "./lib/format";
 import {
   fetchHoldings, seedTemplateIfEmpty, addHolding, updateHolding, deleteHolding,
   fetchSnapshots, saveSnapshot,
+  fetchMyProfile, listProfiles, setProfilePaid,
 } from "./lib/data";
 import {
   Center, Panel, Stat, Seg, Logo, Empty, btnGold, btnGhost, iconBtn, chip, tip,
@@ -24,6 +26,7 @@ import PromptBar from "./components/PromptBar.jsx";
 
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = loading
+  const [profile, setProfile] = useState(undefined); // undefined = loading
 
   useEffect(() => {
     if (!configured) { setSession(null); return; }
@@ -32,13 +35,54 @@ export default function App() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
+  useEffect(() => {
+    if (!session) { setProfile(null); return; }
+    setProfile(undefined);
+    fetchMyProfile(session.user.id).then(setProfile).catch(() => setProfile(null));
+  }, [session]);
+
   if (session === undefined) return <Center><div style={{ color: T.muted, fontFamily: T.sans }}>Loading…</div></Center>;
   if (!session) return <Login />;
-  return <Shell user={session.user} />;
+  if (profile === undefined) return <Center><div style={{ color: T.muted, fontFamily: T.sans }}>Loading…</div></Center>;
+
+  const isOwner = profile?.role === "owner";
+  const paidActive = profile?.is_paid && (!profile?.paid_until || profile.paid_until >= today());
+  if (!isOwner && !paidActive) return <Paywall user={session.user} />;
+
+  return <Shell user={session.user} isOwner={isOwner} />;
+}
+
+/* ── paywall (shown to unpaid, non-owner users) ───────────────────── */
+function Paywall({ user }) {
+  return (
+    <Center>
+      <div style={{ width: 360, maxWidth: "92vw", background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: 28, fontFamily: T.sans, textAlign: "center" }}>
+        <div style={{ width: 46, height: 46, borderRadius: 12, background: T.gold + "22", display: "grid", placeItems: "center", margin: "0 auto 14px" }}>
+          <Lock size={22} color={T.gold} />
+        </div>
+        <div style={{ color: T.text, fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Unlock Folio</div>
+        <div style={{ color: T.muted, fontSize: 13, lineHeight: 1.6, marginBottom: 18 }}>
+          Your account is ready, but access is locked until your subscription is active.
+        </div>
+        <div style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
+          <div style={{ fontSize: 24, fontWeight: 800, fontFamily: T.mono, color: T.gold }}>{PAYWALL.price}</div>
+          <div style={{ color: T.muted, fontSize: 12.5, marginTop: 10, lineHeight: 1.6 }}>
+            Pay via UPI to<br />
+            <span style={{ color: T.text, fontFamily: T.mono, fontSize: 14 }}>{PAYWALL.upi}</span>
+          </div>
+          <div style={{ color: T.faint, fontSize: 11.5, marginTop: 10 }}>{PAYWALL.note}</div>
+        </div>
+        <div style={{ color: T.faint, fontSize: 11.5, marginBottom: 14 }}>Signed in as {user.email}</div>
+        <button onClick={() => supabase.auth.signOut()} style={{ ...btnGhost, width: "100%", justifyContent: "center" }}>
+          <LogOut size={14} /> Sign out
+        </button>
+      </div>
+    </Center>
+  );
 }
 
 /* ── authenticated shell ──────────────────────────────────────────── */
-function Shell({ user }) {
+function Shell({ user, isOwner }) {
   const [page, setPage] = useState("dashboard");
   const [holdings, setHoldings] = useState([]);
   const [snaps, setSnaps] = useState([]);
@@ -123,6 +167,7 @@ function Shell({ user }) {
   if (loading) return <Center><div style={{ color: T.muted, fontFamily: T.sans }}>Loading your portfolio…</div></Center>;
 
   const tabs = [["dashboard", LayoutDashboard, "Dashboard"], ["holdings", ListOrdered, "Holdings"], ["analytics", PieIcon, "Analytics"]];
+  if (isOwner) tabs.push(["admin", Users, "Admin"]);
 
   return (
     <div style={{ minHeight: "100vh", background: T.bg, fontFamily: T.sans, color: T.text, paddingBottom: mobile ? 72 : 0 }}>
@@ -172,6 +217,8 @@ function Shell({ user }) {
         {page === "analytics" && (
           <AnalyticsPage rows={rows} snaps={snaps} chart={chart} setChart={setChart} groupBy={groupBy} setGroupBy={setGroupBy} onSnapshot={snapshot} mobile={mobile} />
         )}
+
+        {page === "admin" && isOwner && <AdminPage mobile={mobile} />}
 
         <div style={{ color: T.faint, fontSize: 11, marginTop: 18, lineHeight: 1.6 }}>
           Signed in as {user.email}. Prices are manual unless refreshed (best-effort). Not investment advice.
@@ -319,6 +366,83 @@ function AnalyticsPage({ rows, snaps, chart, setChart, groupBy, setGroupBy, onSn
 }
 
 const tdR = { padding: "11px 14px", textAlign: "right", whiteSpace: "nowrap" };
+
+/* ── owner admin: manage who has paid ─────────────────────────────── */
+function AdminPage({ mobile }) {
+  const [users, setUsers] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+
+  const load = async () => {
+    setErr("");
+    try { setUsers(await listProfiles()); }
+    catch (e) { setErr("Couldn't load users. Check that the admin keys are set in Vercel."); setUsers([]); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const toggle = async (u, paid) => {
+    setBusy(u.id);
+    try { await setProfilePaid(u.id, paid, 30); await load(); }
+    catch (e) { setErr(String(e.message || e)); }
+    finally { setBusy(""); }
+  };
+
+  const status = (u) => {
+    if (u.role === "owner") return { label: "Owner", color: T.gold };
+    const active = u.is_paid && (!u.paid_until || u.paid_until >= today());
+    return active
+      ? { label: u.paid_until ? `Active till ${u.paid_until}` : "Active", color: T.pos }
+      : { label: "Inactive", color: T.neg };
+  };
+
+  return (
+    <>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 8 }}>
+        <div style={{ fontSize: 15, fontWeight: 700 }}>
+          Members <span style={{ color: T.faint, fontWeight: 400 }}>· {users ? users.length : "…"}</span>
+        </div>
+        <button onClick={load} style={btnGhost}><RefreshCw size={14} /> Refresh</button>
+      </div>
+      {err && <div style={{ color: T.neg, fontSize: 12.5, marginBottom: 10 }}>{err}</div>}
+      <Panel pad={0}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 520 }}>
+            <thead>
+              <tr style={{ color: T.muted }}>
+                {["Email", "Status", ""].map((h, i) => (
+                  <th key={i} style={{ padding: "11px 14px", textAlign: i === 2 ? "right" : "left", fontWeight: 600, borderBottom: `1px solid ${T.border}`, whiteSpace: "nowrap" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {(users || []).map((u) => {
+                const s = status(u);
+                return (
+                  <tr key={u.id} style={{ borderBottom: `1px solid ${T.border}` }}>
+                    <td style={{ padding: "11px 14px" }}>{u.email}</td>
+                    <td style={{ padding: "11px 14px" }}><span style={{ color: s.color, fontWeight: 600 }}>{s.label}</span></td>
+                    <td style={{ ...tdR }}>
+                      {u.role !== "owner" && (
+                        s.label === "Inactive"
+                          ? <button onClick={() => toggle(u, true)} disabled={busy === u.id} style={btnGold}><Check size={13} /> Activate 30d</button>
+                          : <button onClick={() => toggle(u, false)} disabled={busy === u.id} style={btnGhost}>Deactivate</button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {users && users.length === 0 && <tr><td colSpan={3} style={{ padding: 28, textAlign: "center", color: T.faint }}>No members yet.</td></tr>}
+              {!users && <tr><td colSpan={3} style={{ padding: 28, textAlign: "center", color: T.faint }}>Loading…</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+      <div style={{ color: T.faint, fontSize: 11.5, marginTop: 14, lineHeight: 1.6 }}>
+        When a friend pays you ₹99 (via UPI), tap <b style={{ color: T.muted }}>Activate 30d</b>. Their app unlocks instantly and stays active for 30 days.
+      </div>
+    </>
+  );
+}
 
 if (typeof document !== "undefined" && !document.getElementById("spin-kf")) {
   const s = document.createElement("style"); s.id = "spin-kf";

@@ -6,6 +6,13 @@ export const T = {
   sans: "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
 };
 
+// Shown on the paywall to users who haven't paid yet. EDIT the upi to your own.
+export const PAYWALL = {
+  price: "₹99 / month",
+  upi: "your-upi@bank",
+  note: "After paying, the owner will activate your account within a day.",
+};
+
 export const TIERS = { "Safe core": "#3FB950", "Medium": "#D4A84B", "High-risk": "#E5534B" };
 export const PIE = ["#D4A84B", "#3FB950", "#5AA9E6", "#E5534B", "#B07CD6", "#E08E45", "#4DC7C0", "#9AA5B1"];
 
