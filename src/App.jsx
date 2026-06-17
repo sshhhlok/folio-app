@@ -103,7 +103,7 @@ function Shell({ user, isOwner }) {
   useEffect(() => {
     (async () => {
       try {
-        const [h, s] = await Promise.all([seedTemplateIfEmpty(user.id), fetchSnapshots(user.id)]);
+        const [h, s] = await Promise.all([fetchHoldings(user.id), fetchSnapshots(user.id)]);
         setHoldings(h); setSnaps(s);
       } catch (e) { console.error(e); }
       finally { setLoading(false); }
@@ -172,7 +172,7 @@ function Shell({ user, isOwner }) {
   return (
     <div style={{ minHeight: "100vh", background: T.bg, fontFamily: T.sans, color: T.text, paddingBottom: mobile ? 72 : 0 }}>
       {/* header */}
-      <div style={{ borderBottom: `1px solid ${T.border}`, padding: mobile ? "13px 16px" : "15px 28px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div style={{ borderBottom: `1px solid ${T.border}`, padding: mobile ? "13px 16px" : "15px 28px", paddingTop: mobile ? "calc(env(safe-area-inset-top) + 13px)" : "15px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <Logo size={26} />
           <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: -0.3 }}>Folio</span>
@@ -197,13 +197,26 @@ function Shell({ user, isOwner }) {
         </div>
 
         {page === "dashboard" && (
-          <>
-            <PromptBar rows={rows} onAction={applyAction} />
-            <Panel style={{ marginTop: 16 }}>
-              <div style={{ fontSize: 13, color: T.muted, marginBottom: 10 }}>Allocation by holding</div>
-              <AllocPie rows={rows} groupBy="holding" mobile={mobile} />
+          rows.length === 0 ? (
+            <Panel style={{ textAlign: "center", padding: mobile ? "32px 20px" : "48px 28px" }}>
+              <div style={{ width: 52, height: 52, borderRadius: 14, background: T.gold + "22", display: "grid", placeItems: "center", margin: "0 auto 16px" }}>
+                <Plus size={26} color={T.gold} />
+              </div>
+              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Welcome to Folio</div>
+              <div style={{ color: T.muted, fontSize: 13.5, lineHeight: 1.6, maxWidth: 360, margin: "0 auto 20px" }}>
+                Your portfolio is empty. Add your holdings to see your value, charts and trends.
+              </div>
+              <button onClick={() => setForm({})} style={{ ...btnGold, margin: "0 auto" }}><Plus size={15} /> Add your first holding</button>
             </Panel>
-          </>
+          ) : (
+            <>
+              <PromptBar rows={rows} onAction={applyAction} />
+              <Panel style={{ marginTop: 16 }}>
+                <div style={{ fontSize: 13, color: T.muted, marginBottom: 10 }}>Allocation by holding</div>
+                <AllocPie rows={rows} groupBy="holding" mobile={mobile} />
+              </Panel>
+            </>
+          )
         )}
 
         {page === "holdings" && (
