@@ -58,27 +58,27 @@ export async function fetchMyProfile(userId) {
   return data;
 }
 
-// Admin-only calls go through the serverless /api/admin (service role).
-async function adminCall(body) {
-  const { data: { session } } = await supabase.auth.getSession();
-  const res = await fetch("/api/admin", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${session?.access_token || ""}`,
-    },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error((await res.json()).error || "admin error");
-  return res.json();
-}
-
+// Owner manages members directly; secured by the owner-only RLS policy.
 export async function listProfiles() {
-  const { users } = await adminCall({ action: "list" });
-  return users || [];
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id,email,role,is_paid,paid_until,created_at")
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return data || [];
 }
 
 export async function setProfilePaid(userId, paid, days = 30) {
-  const { user } = await adminCall({ action: paid ? "activate" : "deactivate", userId, days });
-  return user;
+  let paid_until = null;
+  if (paid) {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    paid_until = d.toISOString().slice(0, 10);
+  }
+  const { data, error } = await supabase
+    .from("profiles")
+    .update({ is_paid: paid, paid_until })
+    .eq("id", userId).select().single();
+  if (error) throw error;
+  return data;
 }
