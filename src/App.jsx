@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   ResponsiveContainer, PieChart, Pie, Cell, Tooltip as RTooltip,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, LineChart, Line, Legend,
@@ -6,7 +6,7 @@ import {
 import {
   LayoutDashboard, ListOrdered, Plus, Pencil, Trash2, Save,
   LogOut, RefreshCw, X, PieChart as PieIcon, BarChart3, LineChart as LineIcon,
-  Users, Lock, Check, IndianRupee,
+  Users, Lock, Check, IndianRupee, Upload,
 } from "lucide-react";
 
 import { T, TIERS, PIE, PAYWALL } from "./theme";
@@ -24,6 +24,7 @@ import Login from "./components/Login.jsx";
 import HoldingForm from "./components/HoldingForm.jsx";
 import PromptBar from "./components/PromptBar.jsx";
 import { QRCodeSVG } from "qrcode.react";
+import { parseHoldingsFile } from "./lib/importZerodha";
 
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = loading
@@ -96,6 +97,8 @@ function Shell({ user, isOwner }) {
   const [filter, setFilter] = useState(null);
   const [form, setForm] = useState(null); // null | {} | holding
   const [refreshing, setRefreshing] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState("");
   const [w, setW] = useState(typeof window !== "undefined" ? window.innerWidth : 1000);
 
   useEffect(() => {
@@ -154,6 +157,22 @@ function Shell({ user, isOwner }) {
       setHoldings((hs) => hs.map((h) => prices?.[h.symbol?.toUpperCase()] ? { ...h, ltp: prices[h.symbol.toUpperCase()] } : h));
     } catch (e) { console.error(e); }
     finally { setRefreshing(false); }
+  };
+
+  const handleImport = async (file) => {
+    setImporting(true); setImportMsg("");
+    try {
+      const parsed = await parseHoldingsFile(file);
+      const have = new Set(holdings.map((h) => h.symbol.toUpperCase()));
+      const fresh = parsed.filter((p) => !have.has(p.symbol.toUpperCase()));
+      const added = [];
+      for (const p of fresh) { const a = await addHolding(user.id, p); added.push(a); }
+      setHoldings((hs) => [...hs, ...added]);
+      const skipped = parsed.length - added.length;
+      setImportMsg(`Imported ${added.length} holding${added.length === 1 ? "" : "s"}${skipped ? `, skipped ${skipped} already in your list` : ""}.`);
+    } catch (e) {
+      setImportMsg("Couldn't read that file. Use your Zerodha Holdings download (.xlsx or .csv).");
+    } finally { setImporting(false); }
   };
 
   const applyAction = useCallback((a) => {
@@ -228,6 +247,7 @@ function Shell({ user, isOwner }) {
             rows={rows} filter={filter} setFilter={setFilter} mobile={mobile}
             onAdd={() => setForm({})} onEdit={(r) => setForm(r)} onDelete={remove}
             onRefresh={refreshPrices} refreshing={refreshing}
+            onImport={handleImport} importing={importing} importMsg={importMsg}
           />
         )}
 
@@ -283,7 +303,8 @@ function AllocPie({ rows, groupBy, mobile }) {
   );
 }
 
-function HoldingsPage({ rows, filter, setFilter, mobile, onAdd, onEdit, onDelete, onRefresh, refreshing }) {
+function HoldingsPage({ rows, filter, setFilter, mobile, onAdd, onEdit, onDelete, onRefresh, refreshing, onImport, importing, importMsg }) {
+  const fileRef = useRef(null);
   const filtered = useMemo(() => {
     if (!filter) return rows;
     if (filter.kind === "losers") return rows.filter((r) => r.pnl < 0);
@@ -300,11 +321,17 @@ function HoldingsPage({ rows, filter, setFilter, mobile, onAdd, onEdit, onDelete
           Holdings <span style={{ color: T.faint, fontWeight: 400 }}>· {filtered.length}</span>
           {filter && <button onClick={() => setFilter(null)} style={{ ...chip, marginLeft: 8 }}>{flabel} <X size={11} /></button>}
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={onRefresh} disabled={refreshing} style={btnGhost}>{refreshing ? <RefreshCw size={14} className="spin" /> : <RefreshCw size={14} />} Refresh prices</button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) onImport(f); e.target.value = ""; }} />
+          <button onClick={() => fileRef.current?.click()} disabled={importing} style={btnGhost}>
+            {importing ? <RefreshCw size={14} className="spin" /> : <Upload size={14} />} {importing ? "Importing…" : "Import"}
+          </button>
+          <button onClick={onRefresh} disabled={refreshing} style={btnGhost}><RefreshCw size={14} className={refreshing ? "spin" : ""} /> Refresh prices</button>
           <button onClick={onAdd} style={btnGold}><Plus size={15} /> Add</button>
         </div>
       </div>
+      {importMsg && <div style={{ color: T.muted, fontSize: 12.5, marginBottom: 10 }}>{importMsg}</div>}
       <Panel pad={0}>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 640 }}>
