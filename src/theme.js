@@ -9,7 +9,7 @@ export const T = {
 // Shown on the paywall to users who haven't paid yet. EDIT the upi to your own.
 export const PAYWALL = {
   price: "₹99 / month",
-  upi: "your-upi@bank",
+  upi: "9559778048-4@ybl",
   note: "After paying, the owner will activate your account within a day.",
 };
 
