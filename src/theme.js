@@ -14,7 +14,7 @@ export const CHART = { gold: "#C8902F", pos: "#1F9D57", neg: "#D64541", axis: "#
 
 export const PAYWALL = {
   price: "₹99 / month",
-  upi: "your-upi@bank",
+  upi: "9559778048-4@ybl",
   note: "After paying, the owner will activate your account within a day.",
 };
 
