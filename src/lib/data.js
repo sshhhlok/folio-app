@@ -1,18 +1,8 @@
 import { supabase } from "../supabaseClient";
-import { TEMPLATE } from "../theme";
 
 export async function fetchHoldings(userId) {
   const { data, error } = await supabase
     .from("holdings").select("*").eq("user_id", userId).order("created_at", { ascending: true });
-  if (error) throw error;
-  return data || [];
-}
-
-export async function seedTemplateIfEmpty(userId) {
-  const existing = await fetchHoldings(userId);
-  if (existing.length) return existing;
-  const rows = TEMPLATE.map((t) => ({ ...t, user_id: userId }));
-  const { data, error } = await supabase.from("holdings").insert(rows).select();
   if (error) throw error;
   return data || [];
 }
@@ -81,4 +71,21 @@ export async function setProfilePaid(userId, paid, days = 30) {
     .eq("id", userId).select().single();
   if (error) throw error;
   return data;
+}
+
+/* ── invested-journey (from tradebook) ────────────────────────────── */
+export async function fetchJourney(userId) {
+  const { data, error } = await supabase
+    .from("journey").select("date,invested").eq("user_id", userId).order("date", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function saveJourney(userId, series) {
+  await supabase.from("journey").delete().eq("user_id", userId);
+  if (!series.length) return [];
+  const rows = series.map((p) => ({ user_id: userId, date: p.date, invested: p.invested }));
+  const { data, error } = await supabase.from("journey").insert(rows).select("date,invested");
+  if (error) throw error;
+  return data || [];
 }

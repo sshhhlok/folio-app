@@ -6,16 +6,17 @@ import {
 import {
   LayoutDashboard, ListOrdered, Plus, Pencil, Trash2, Save,
   LogOut, RefreshCw, X, PieChart as PieIcon, BarChart3, LineChart as LineIcon,
-  Users, Lock, Check, IndianRupee, Upload,
+  Users, Lock, Check, IndianRupee, Upload, Sun, Moon, TrendingUp,
 } from "lucide-react";
 
-import { T, TIERS, PIE, PAYWALL } from "./theme";
+import { T, CHART, TIERS, PIE, PAYWALL, getTheme, setTheme, assetType } from "./theme";
 import { supabase, configured } from "./supabaseClient";
 import { inr, inrShort, pct, num, today, withCalc } from "./lib/format";
 import {
-  fetchHoldings, seedTemplateIfEmpty, addHolding, updateHolding, deleteHolding,
+  fetchHoldings, addHolding, updateHolding, deleteHolding,
   fetchSnapshots, saveSnapshot,
   fetchMyProfile, listProfiles, setProfilePaid,
+  fetchJourney, saveJourney,
 } from "./lib/data";
 import {
   Center, Panel, Stat, Seg, Logo, Empty, btnGold, btnGhost, iconBtn, chip, tip,
@@ -25,6 +26,7 @@ import HoldingForm from "./components/HoldingForm.jsx";
 import PromptBar from "./components/PromptBar.jsx";
 import { QRCodeSVG } from "qrcode.react";
 import { parseHoldingsFile } from "./lib/importZerodha";
+import { parseTradebook } from "./lib/importTradebook";
 
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = loading
@@ -88,8 +90,14 @@ function Paywall({ user }) {
 
 /* ── authenticated shell ──────────────────────────────────────────── */
 function Shell({ user, isOwner }) {
-  const [page, setPage] = useState("dashboard");
+  const [page, setPageRaw] = useState(() => {
+    try { return localStorage.getItem("folio-tab") || "dashboard"; } catch { return "dashboard"; }
+  });
+  const setPage = (p) => { try { localStorage.setItem("folio-tab", p); } catch {} setPageRaw(p); };
+  const [theme, setThemeState] = useState(getTheme());
+  const toggleTheme = () => { const t = theme === "dark" ? "light" : "dark"; setTheme(t); setThemeState(t); };
   const [holdings, setHoldings] = useState([]);
+  const [journey, setJourney] = useState([]);
   const [snaps, setSnaps] = useState([]);
   const [loading, setLoading] = useState(true);
   const [chart, setChart] = useState("pie");
@@ -110,8 +118,8 @@ function Shell({ user, isOwner }) {
   useEffect(() => {
     (async () => {
       try {
-        const [h, s] = await Promise.all([fetchHoldings(user.id), fetchSnapshots(user.id)]);
-        setHoldings(h); setSnaps(s);
+        const [h, s, j] = await Promise.all([fetchHoldings(user.id), fetchSnapshots(user.id), fetchJourney(user.id)]);
+        setHoldings(h); setSnaps(s); setJourney(j);
       } catch (e) { console.error(e); }
       finally { setLoading(false); }
     })();
@@ -175,6 +183,18 @@ function Shell({ user, isOwner }) {
     } finally { setImporting(false); }
   };
 
+  const handleTradebook = async (file) => {
+    setImporting(true); setImportMsg("");
+    try {
+      const series = await parseTradebook(file);
+      const saved = await saveJourney(user.id, series);
+      setJourney(saved);
+      setImportMsg(`Investment journey built from ${series.length} dates.`);
+    } catch (e) {
+      setImportMsg("Couldn't read that file. Use your Zerodha Tradebook download (.xlsx or .csv).");
+    } finally { setImporting(false); }
+  };
+
   const applyAction = useCallback((a) => {
     switch (a.type) {
       case "set_chart": setChart(a.chart); setPage("analytics"); break;
@@ -206,6 +226,9 @@ function Shell({ user, isOwner }) {
               <Icon size={15} /> {label}
             </button>
           ))}
+          <button onClick={toggleTheme} style={iconBtn} aria-label="Toggle light or dark theme" title="Toggle theme">
+            {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
           <button onClick={() => supabase.auth.signOut()} style={btnGhost}><LogOut size={14} /> {mobile ? "" : "Sign out"}</button>
         </div>
       </div>
@@ -234,10 +257,16 @@ function Shell({ user, isOwner }) {
           ) : (
             <>
               <PromptBar rows={rows} onAction={applyAction} />
-              <Panel style={{ marginTop: 16 }}>
-                <div style={{ fontSize: 13, color: T.muted, marginBottom: 10 }}>Allocation by holding</div>
-                <AllocPie rows={rows} groupBy="holding" mobile={mobile} />
-              </Panel>
+              <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr", gap: 12, marginTop: 16 }}>
+                <Donut title="By asset type" data={groupSum(rows, (r) => assetType(r))} colorFor={assetColor} mobile={mobile} />
+                <Donut title="By sector" data={groupSum(rows, (r) => r.sector || "Unclassified")} mobile={mobile} />
+              </div>
+              <div style={{ marginTop: 12 }}>
+                <Donut title="By holding" data={rows.map((r) => ({ name: r.symbol, value: r.value }))} mobile={mobile} />
+              </div>
+              <div style={{ marginTop: 12 }}>
+                <JourneyCard journey={journey} onImport={handleTradebook} importing={importing} mobile={mobile} />
+              </div>
             </>
           )
         )}
@@ -279,6 +308,81 @@ function Shell({ user, isOwner }) {
 }
 
 /* ── pages & charts ───────────────────────────────────────────────── */
+function groupSum(rows, keyFn) {
+  const m = {};
+  rows.forEach((r) => { const k = keyFn(r) || "—"; m[k] = (m[k] || 0) + r.value; });
+  return Object.entries(m).map(([name, value]) => ({ name, value }));
+}
+const ASSET_COLORS = { Equity: "#3FB07A", ETF: "#4C7DF0", Gold: "#E0A93B", Silver: "#9AA5B4" };
+const assetColor = (name, i) => ASSET_COLORS[name] || PIE[i % PIE.length];
+
+function Donut({ title, data, mobile, colorFor }) {
+  const sorted = [...data].sort((a, b) => b.value - a.value);
+  const total = sorted.reduce((a, d) => a + d.value, 0) || 1;
+  const color = (name, i) => (colorFor ? colorFor(name, i) : PIE[i % PIE.length]);
+  return (
+    <Panel>
+      <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 8 }}>{title}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: mobile ? 14 : 22, flexWrap: mobile ? "wrap" : "nowrap" }}>
+        <div style={{ width: mobile ? "100%" : 180, height: 180, flexShrink: 0 }}>
+          <ResponsiveContainer>
+            <PieChart>
+              <Pie data={sorted} dataKey="value" nameKey="name" innerRadius={54} outerRadius={82} paddingAngle={2} stroke="none">
+                {sorted.map((e, i) => <Cell key={i} fill={color(e.name, i)} />)}
+              </Pie>
+              <RTooltip {...tip} formatter={(v) => inr(v)} />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{ flex: 1, minWidth: 150, width: mobile ? "100%" : "auto" }}>
+          {sorted.slice(0, 7).map((d, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "4px 0" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                <span style={{ width: 9, height: 9, borderRadius: 3, background: color(d.name, i), flexShrink: 0 }} />
+                <span style={{ fontSize: 12.5, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.name}</span>
+              </div>
+              <span style={{ fontSize: 12.5, fontFamily: T.mono, color: T.muted, flexShrink: 0, marginLeft: 8 }}>{((d.value / total) * 100).toFixed(1)}%</span>
+            </div>
+          ))}
+          {sorted.length > 7 && <div style={{ fontSize: 11.5, color: T.faint, marginTop: 4 }}>+{sorted.length - 7} more</div>}
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function JourneyCard({ journey, onImport, importing, mobile }) {
+  const fileRef = useRef(null);
+  const data = (journey || []).map((d) => ({ date: d.date, invested: d.invested }));
+  return (
+    <Panel>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 13.5, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
+          <TrendingUp size={15} color={CHART.gold} /> Investment journey
+        </div>
+        <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }}
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) onImport(f); e.target.value = ""; }} />
+        <button onClick={() => fileRef.current?.click()} disabled={importing} style={btnGhost}>
+          {importing ? <RefreshCw size={14} className="spin" /> : <Upload size={14} />} {data.length ? "Update from tradebook" : "Import tradebook"}
+        </button>
+      </div>
+      {data.length < 2
+        ? <Empty text="Upload your Zerodha tradebook to chart how much you've invested over time." />
+        : <div style={{ height: mobile ? 230 : 260 }}>
+          <ResponsiveContainer>
+            <LineChart data={data}>
+              <CartesianGrid stroke={CHART.grid} vertical={false} />
+              <XAxis dataKey="date" tick={{ fill: CHART.axis, fontSize: 11 }} axisLine={{ stroke: CHART.grid }} tickLine={false} minTickGap={28} />
+              <YAxis tick={{ fill: CHART.axis, fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={inrShort} width={64} />
+              <RTooltip {...tip} formatter={(v) => inr(v)} />
+              <Line type="monotone" dataKey="invested" stroke={CHART.gold} strokeWidth={2} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>}
+    </Panel>
+  );
+}
+
 function AllocPie({ rows, groupBy, mobile }) {
   const data = useMemo(() => {
     if (groupBy === "tier" || groupBy === "sector") {
@@ -383,11 +487,11 @@ function AnalyticsPage({ rows, snaps, chart, setChart, groupBy, setGroupBy, onSn
         {chart === "bar" && (
           <ResponsiveContainer>
             <BarChart data={rows.map((r) => ({ name: r.symbol, pnl: Math.round(r.pnl) }))}>
-              <CartesianGrid stroke={T.border} vertical={false} />
-              <XAxis dataKey="name" tick={{ fill: T.muted, fontSize: 11 }} axisLine={{ stroke: T.border }} tickLine={false} />
-              <YAxis tick={{ fill: T.muted, fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={inrShort} width={64} />
+              <CartesianGrid stroke={CHART.grid} vertical={false} />
+              <XAxis dataKey="name" tick={{ fill: CHART.axis, fontSize: 11 }} axisLine={{ stroke: CHART.grid }} tickLine={false} />
+              <YAxis tick={{ fill: CHART.axis, fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={inrShort} width={64} />
               <RTooltip {...tip} formatter={(v) => inr(v)} />
-              <Bar dataKey="pnl" radius={[4, 4, 0, 0]}>{rows.map((r, i) => <Cell key={i} fill={r.pnl >= 0 ? T.pos : T.neg} />)}</Bar>
+              <Bar dataKey="pnl" radius={[4, 4, 0, 0]}>{rows.map((r, i) => <Cell key={i} fill={r.pnl >= 0 ? CHART.pos : CHART.neg} />)}</Bar>
             </BarChart>
           </ResponsiveContainer>
         )}
@@ -396,11 +500,11 @@ function AnalyticsPage({ rows, snaps, chart, setChart, groupBy, setGroupBy, onSn
             ? <Empty text="Tap “Snapshot today” on a few different days to build your value trend." />
             : <ResponsiveContainer>
               <LineChart data={snaps}>
-                <CartesianGrid stroke={T.border} vertical={false} />
-                <XAxis dataKey="date" tick={{ fill: T.muted, fontSize: 11 }} axisLine={{ stroke: T.border }} tickLine={false} />
-                <YAxis tick={{ fill: T.muted, fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={inrShort} width={64} domain={["auto", "auto"]} />
+                <CartesianGrid stroke={CHART.grid} vertical={false} />
+                <XAxis dataKey="date" tick={{ fill: CHART.axis, fontSize: 11 }} axisLine={{ stroke: CHART.grid }} tickLine={false} />
+                <YAxis tick={{ fill: CHART.axis, fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={inrShort} width={64} domain={["auto", "auto"]} />
                 <RTooltip {...tip} formatter={(v) => inr(v)} />
-                <Line type="monotone" dataKey="value" stroke={T.gold} strokeWidth={2} dot={{ r: 3, fill: T.gold }} />
+                <Line type="monotone" dataKey="value" stroke={CHART.gold} strokeWidth={2} dot={{ r: 3, fill: CHART.gold }} />
               </LineChart>
             </ResponsiveContainer>
         )}

@@ -1,25 +1,42 @@
+// Colors are CSS variables so a single [data-theme] switch flips the whole app
+// instantly (light/dark) with no re-render needed.
 export const T = {
-  bg: "#0E1116", surface: "#161B22", surface2: "#1C232C", border: "#262E38",
-  text: "#E6E9ED", muted: "#8B95A1", faint: "#5A6573",
-  gold: "#D4A84B", pos: "#3FB950", neg: "#E5534B",
+  bg: "var(--c-bg)", surface: "var(--c-surface)", surface2: "var(--c-surface2)",
+  border: "var(--c-border)", text: "var(--c-text)", muted: "var(--c-muted)", faint: "var(--c-faint)",
+  gold: "var(--c-gold)", pos: "var(--c-pos)", neg: "var(--c-neg)",
   mono: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
   sans: "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
 };
 
-// Shown on the paywall to users who haven't paid yet. EDIT the upi to your own.
+// Hard hex for chart drawing (SVG attributes don't reliably accept var()).
+// These read fine on both light and dark.
+export const CHART = { gold: "#C8902F", pos: "#1F9D57", neg: "#D64541", axis: "#8b95a1", grid: "rgba(128,128,128,0.18)" };
+
 export const PAYWALL = {
   price: "₹99 / month",
   upi: "your-upi@bank",
   note: "After paying, the owner will activate your account within a day.",
 };
 
-export const TIERS = { "Safe core": "#3FB950", "Medium": "#D4A84B", "High-risk": "#E5534B" };
-export const PIE = ["#D4A84B", "#3FB950", "#5AA9E6", "#E5534B", "#B07CD6", "#E08E45", "#4DC7C0", "#9AA5B1"];
+export const TIERS = { "Safe core": "#1F9D57", "Medium": "#C8902F", "High-risk": "#D64541" };
+export const PIE = ["#C8902F", "#1F9D57", "#378ADD", "#D64541", "#9A6DD7", "#E08E45", "#3FB0A8", "#7E8794"];
 
-export const TEMPLATE = [
-  { symbol: "NIFTYBEES", qty: 100, avg: 250, ltp: 268, sector: "Index ETF", tier: "Safe core" },
-  { symbol: "HDFCBANK", qty: 20, avg: 1500, ltp: 1632, sector: "Banking", tier: "Safe core" },
-  { symbol: "TATAMOTORS", qty: 30, avg: 650, ltp: 712, sector: "Auto", tier: "Medium" },
-  { symbol: "GOLDBEES", qty: 80, avg: 62, ltp: 71, sector: "Commodity ETF", tier: "Medium" },
-  { symbol: "IDEA", qty: 500, avg: 14, ltp: 9.8, sector: "Telecom", tier: "High-risk" },
-];
+export const TEMPLATE = [];
+
+// ── theme switching (light default) ───────────────────────────────
+export function getTheme() {
+  try { return document.documentElement.dataset.theme || localStorage.getItem("folio_theme") || "light"; }
+  catch { return "light"; }
+}
+export function setTheme(t) {
+  try { document.documentElement.dataset.theme = t; localStorage.setItem("folio_theme", t); } catch {}
+}
+
+// ── auto-classify a holding into an asset type for the dashboard ──
+export function assetType(h) {
+  const s = String(h.symbol || "").toUpperCase();
+  if (/GOLD/.test(s)) return "Gold";
+  if (/SILVER|SLVR/.test(s)) return "Silver";
+  if (/BEES|ETF|NIFTY|SENSEX|LIQUID|GILT|BOND|SDL|GSEC|N100|MOM|MAFANG|HNGSNGBEES/.test(s)) return "ETF";
+  return "Equity";
+}

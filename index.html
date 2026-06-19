@@ -1,19 +1,38 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#0E1116" />
+    <meta name="theme-color" content="#F7F8FA" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Folio" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
     <title>Folio — Portfolio Tracker</title>
     <style>
-      html, body, #root { height: 100%; margin: 0; background: #0E1116; }
+      :root, [data-theme="light"] {
+        --bg:#F6F8FB; --surface:#FFFFFF; --surface2:#EFF2F7; --border:#E3E8EF;
+        --text:#161B22; --muted:#5B6675; --faint:#9AA5B4;
+        --gold:#B9842A; --pos:#1B9E4B; --neg:#D23B3B;
+      }
+      [data-theme="dark"] {
+        --bg:#0E1116; --surface:#161B22; --surface2:#1C232C; --border:#262E38;
+        --text:#E6E9ED; --muted:#8B95A1; --faint:#5A6573;
+        --gold:#D4A84B; --pos:#3FB950; --neg:#E5534B;
+      }
+      html, body, #root { height: 100%; margin: 0; background: var(--bg); }
       * { box-sizing: border-box; }
     </style>
+    <script>
+      // Apply saved theme before paint (default light) to avoid a flash.
+      (function () {
+        try {
+          var t = localStorage.getItem("folio_theme") || "light";
+          document.documentElement.setAttribute("data-theme", t);
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
