@@ -213,9 +213,9 @@ function Shell({ user, isOwner }) {
       <div style={{ maxWidth: 1120, margin: "0 auto", padding: mobile ? 16 : "24px 28px" }}>
         {/* summary always on top */}
         <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr 1fr" : "repeat(4,1fr)", gap: 12, marginBottom: 20 }}>
-          <Stat label="Invested" value={inrShort(totals.invested)} />
-          <Stat label="Current value" value={inrShort(totals.value)} />
-          <Stat label="Total P&L" value={inrShort(totals.pnl)} color={totals.pnl >= 0 ? T.pos : T.neg} />
+          <Stat label="Invested" value={inr(totals.invested)} />
+          <Stat label="Current value" value={inr(totals.value)} />
+          <Stat label="Total P&L" value={inr(totals.pnl)} color={totals.pnl >= 0 ? T.pos : T.neg} />
           <Stat label="Return" value={pct(totals.pnlPct)} color={totals.pnl >= 0 ? T.pos : T.neg} />
         </div>
 
@@ -295,7 +295,7 @@ function AllocPie({ rows, groupBy, mobile }) {
           <Pie data={data} dataKey="value" nameKey="name" innerRadius={mobile ? 50 : 70} outerRadius={mobile ? 90 : 110} paddingAngle={2} stroke="none">
             {data.map((e, i) => <Cell key={i} fill={groupBy === "tier" ? (TIERS[e.name] || PIE[i % PIE.length]) : PIE[i % PIE.length]} />)}
           </Pie>
-          <RTooltip {...tip} formatter={(v) => inrShort(v)} />
+          <RTooltip {...tip} formatter={(v) => inr(v)} />
           <Legend wrapperStyle={{ fontSize: 12 }} />
         </PieChart>
       </ResponsiveContainer>
@@ -350,9 +350,9 @@ function HoldingsPage({ rows, filter, setFilter, mobile, onAdd, onEdit, onDelete
                   <td style={tdR}>{r.qty}</td>
                   <td style={tdR}>{num(r.avg).toLocaleString("en-IN")}</td>
                   <td style={tdR}>{num(r.ltp).toLocaleString("en-IN")}</td>
-                  <td style={tdR}>{inrShort(r.invested)}</td>
-                  <td style={tdR}>{inrShort(r.value)}</td>
-                  <td style={{ ...tdR, color: r.pnl >= 0 ? T.pos : T.neg }}>{inrShort(r.pnl)}<div style={{ fontSize: 11 }}>{pct(r.pnlPct)}</div></td>
+                  <td style={tdR}>{inr(r.invested)}</td>
+                  <td style={tdR}>{inr(r.value)}</td>
+                  <td style={{ ...tdR, color: r.pnl >= 0 ? T.pos : T.neg }}>{inr(r.pnl)}<div style={{ fontSize: 11 }}>{pct(r.pnlPct)}</div></td>
                   <td style={{ ...tdR, whiteSpace: "nowrap" }}>
                     <button onClick={() => onEdit(r)} style={iconBtn}><Pencil size={13} /></button>
                     <button onClick={() => onDelete(r.id)} style={iconBtn}><Trash2 size={13} /></button>
