@@ -89,3 +89,19 @@ export async function saveJourney(userId, series) {
   if (error) throw error;
   return data || [];
 }
+
+/* ── app settings (payment / UPI) ─────────────────────────────────── */
+export async function getSettings() {
+  const { data, error } = await supabase
+    .from("app_settings").select("upi_id,payee,amount").eq("id", 1).single();
+  if (error) throw error;
+  return data;
+}
+
+export async function saveSettings(s) {
+  const { data, error } = await supabase.from("app_settings")
+    .update({ upi_id: s.upi_id, payee: s.payee, amount: s.amount, updated_at: new Date().toISOString() })
+    .eq("id", 1).select("upi_id,payee,amount").single();
+  if (error) throw error;
+  return data;
+}

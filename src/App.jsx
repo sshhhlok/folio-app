@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   ResponsiveContainer, PieChart, Pie, Cell, Tooltip as RTooltip,
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, LineChart, Line, Legend,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, LineChart, Line, Legend, ReferenceLine,
 } from "recharts";
 import {
   LayoutDashboard, ListOrdered, Plus, Pencil, Trash2, Save,
@@ -17,6 +17,7 @@ import {
   fetchSnapshots, saveSnapshot,
   fetchMyProfile, listProfiles, setProfilePaid,
   fetchJourney, saveJourney,
+  getSettings, saveSettings,
 } from "./lib/data";
 import {
   Center, Panel, Stat, Seg, Logo, Empty, btnGold, btnGhost, iconBtn, chip, tip,
@@ -58,6 +59,13 @@ export default function App() {
 
 /* ── paywall (shown to unpaid, non-owner users) ───────────────────── */
 function Paywall({ user }) {
+  const [s, setS] = useState(null);
+  useEffect(() => { getSettings().then(setS).catch(() => setS(null)); }, []);
+  const upi = (s?.upi_id || PAYWALL.upi || "").trim();
+  const amount = s?.amount ?? PAYWALL.amount ?? 99;
+  const payee = (s?.payee || PAYWALL.payee || "Folio").trim();
+  const priceLabel = `₹${amount} / month`;
+  const qrValue = upi ? `upi://pay?pa=${upi}&pn=${encodeURIComponent(payee)}&am=${amount}&cu=INR` : "";
   return (
     <Center>
       <div style={{ width: 360, maxWidth: "92vw", background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: 28, fontFamily: T.sans, textAlign: "center" }}>
@@ -69,14 +77,22 @@ function Paywall({ user }) {
           Your account is ready, but access is locked until your subscription is active.
         </div>
         <div style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
-          <div style={{ fontSize: 24, fontWeight: 800, fontFamily: T.mono, color: T.gold }}>{PAYWALL.price}</div>
-          <div style={{ background: "#fff", padding: 12, borderRadius: 10, display: "inline-block", margin: "14px 0 6px" }}>
-            <QRCodeSVG value={`upi://pay?pa=${PAYWALL.upi}&pn=Folio&am=99&cu=INR`} size={132} />
-          </div>
-          <div style={{ color: T.muted, fontSize: 12.5, marginTop: 8, lineHeight: 1.6 }}>
-            Scan to pay, or send to UPI ID<br />
-            <span style={{ color: T.text, fontFamily: T.mono, fontSize: 14 }}>{PAYWALL.upi}</span>
-          </div>
+          <div style={{ fontSize: 24, fontWeight: 800, fontFamily: T.mono, color: T.gold }}>{priceLabel}</div>
+          {upi ? (
+            <>
+              <div style={{ background: "#fff", padding: 12, borderRadius: 10, display: "inline-block", margin: "14px 0 6px" }}>
+                <QRCodeSVG value={qrValue} size={132} />
+              </div>
+              <div style={{ color: T.muted, fontSize: 12.5, marginTop: 8, lineHeight: 1.6 }}>
+                Scan to pay, or send to UPI ID<br />
+                <span style={{ color: T.text, fontFamily: T.mono, fontSize: 14 }}>{upi}</span>
+              </div>
+            </>
+          ) : (
+            <div style={{ color: T.muted, fontSize: 12.5, marginTop: 12, lineHeight: 1.6 }}>
+              Payment details haven’t been set up yet. Please contact the owner to pay.
+            </div>
+          )}
           <div style={{ color: T.faint, fontSize: 11.5, marginTop: 10 }}>{PAYWALL.note}</div>
         </div>
         <div style={{ color: T.faint, fontSize: 11.5, marginBottom: 14 }}>Signed in as {user.email}</div>
@@ -104,6 +120,7 @@ function Shell({ user, isOwner }) {
   const [groupBy, setGroupBy] = useState("holding");
   const [filter, setFilter] = useState(null);
   const [form, setForm] = useState(null); // null | {} | holding
+  const [detail, setDetail] = useState(null); // holding being inspected
   const [refreshing, setRefreshing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState("");
@@ -117,11 +134,13 @@ function Shell({ user, isOwner }) {
 
   useEffect(() => {
     (async () => {
-      try {
-        const [h, s, j] = await Promise.all([fetchHoldings(user.id), fetchSnapshots(user.id), fetchJourney(user.id)]);
-        setHoldings(h); setSnaps(s); setJourney(j);
-      } catch (e) { console.error(e); }
-      finally { setLoading(false); }
+      // Load each independently — a failure in one (e.g. journey table not
+      // created yet) must never wipe the others. This was causing holdings
+      // to appear "lost" on every reopen.
+      try { setHoldings(await fetchHoldings(user.id)); } catch (e) { console.error("holdings", e); }
+      try { setSnaps(await fetchSnapshots(user.id)); } catch (e) { console.error("snaps", e); }
+      try { setJourney(await fetchJourney(user.id)); } catch (e) { console.error("journey", e); }
+      setLoading(false);
     })();
   }, [user.id]);
 
@@ -274,7 +293,7 @@ function Shell({ user, isOwner }) {
         {page === "holdings" && (
           <HoldingsPage
             rows={rows} filter={filter} setFilter={setFilter} mobile={mobile}
-            onAdd={() => setForm({})} onEdit={(r) => setForm(r)} onDelete={remove}
+            onAdd={() => setForm({})} onEdit={(r) => setForm(r)} onDelete={remove} onView={setDetail}
             onRefresh={refreshPrices} refreshing={refreshing}
             onImport={handleImport} importing={importing} importMsg={importMsg}
           />
@@ -303,6 +322,7 @@ function Shell({ user, isOwner }) {
       )}
 
       {form && <HoldingForm initial={form.id ? form : null} onSave={onSave} onClose={() => setForm(null)} />}
+      {detail && <HoldingDetail row={detail} onClose={() => setDetail(null)} mobile={mobile} />}
     </div>
   );
 }
@@ -407,7 +427,7 @@ function AllocPie({ rows, groupBy, mobile }) {
   );
 }
 
-function HoldingsPage({ rows, filter, setFilter, mobile, onAdd, onEdit, onDelete, onRefresh, refreshing, onImport, importing, importMsg }) {
+function HoldingsPage({ rows, filter, setFilter, mobile, onAdd, onEdit, onDelete, onView, onRefresh, refreshing, onImport, importing, importMsg }) {
   const fileRef = useRef(null);
   const filtered = useMemo(() => {
     if (!filter) return rows;
@@ -449,7 +469,10 @@ function HoldingsPage({ rows, filter, setFilter, mobile, onAdd, onEdit, onDelete
             <tbody style={{ fontFamily: T.mono }}>
               {filtered.map((r) => (
                 <tr key={r.id} style={{ borderBottom: `1px solid ${T.border}` }}>
-                  <td style={{ padding: "11px 14px", fontWeight: 600, fontFamily: T.sans }}>{r.symbol}<div style={{ color: T.faint, fontSize: 11 }}>{r.sector}</div></td>
+                  <td style={{ padding: "11px 14px", fontWeight: 600, fontFamily: T.sans }}>
+                    <button onClick={() => onView(r)} style={{ background: "none", border: "none", padding: 0, color: T.text, fontWeight: 600, fontFamily: T.sans, cursor: "pointer", fontSize: 13 }}>{r.symbol}</button>
+                    <div style={{ color: T.faint, fontSize: 11 }}>{r.sector}</div>
+                  </td>
                   <td style={{ padding: "11px 14px" }}><span style={{ ...chip, background: (TIERS[r.tier] || T.faint) + "22", color: TIERS[r.tier] || T.muted, border: "none" }}>{r.tier}</span></td>
                   <td style={tdR}>{r.qty}</td>
                   <td style={tdR}>{num(r.avg).toLocaleString("en-IN")}</td>
@@ -458,6 +481,7 @@ function HoldingsPage({ rows, filter, setFilter, mobile, onAdd, onEdit, onDelete
                   <td style={tdR}>{inr(r.value)}</td>
                   <td style={{ ...tdR, color: r.pnl >= 0 ? T.pos : T.neg }}>{inr(r.pnl)}<div style={{ fontSize: 11 }}>{pct(r.pnlPct)}</div></td>
                   <td style={{ ...tdR, whiteSpace: "nowrap" }}>
+                    <button onClick={() => onView(r)} style={iconBtn} title="Details"><LineIcon size={13} /></button>
                     <button onClick={() => onEdit(r)} style={iconBtn}><Pencil size={13} /></button>
                     <button onClick={() => onDelete(r.id)} style={iconBtn}><Trash2 size={13} /></button>
                   </td>
@@ -513,7 +537,162 @@ function AnalyticsPage({ rows, snaps, chart, setChart, groupBy, setGroupBy, onSn
   );
 }
 
+function HoldingDetail({ row, onClose, mobile }) {
+  const [d, setD] = useState(undefined); // undefined=loading, null=failed, obj=ok
+  useEffect(() => {
+    let alive = true; setD(undefined);
+    fetch(`/api/detail?symbol=${encodeURIComponent(row.symbol)}`)
+      .then((r) => r.json()).then((j) => { if (alive) setD(j && j.ok ? j : null); })
+      .catch(() => { if (alive) setD(null); });
+    return () => { alive = false; };
+  }, [row.symbol]);
+
+  const avg = num(row.avg);
+  const live = d && typeof d.price === "number" ? d.price : num(row.ltp);
+  const invested = avg * num(row.qty);
+  const value = live * num(row.qty);
+  const pnl = value - invested;
+  const pnlPct = invested ? (pnl / invested) * 100 : 0;
+
+  const hist = useMemo(() => {
+    if (!d?.history?.length) return [];
+    const cl = d.history.map((h) => h.close);
+    const lo = Math.min(...cl), hi = Math.max(...cl);
+    const n = 10, w = (hi - lo) / n || 1;
+    const b = Array.from({ length: n }, (_, i) => ({ label: Math.round(lo + w * (i + 0.5)), count: 0 }));
+    cl.forEach((c) => { let k = Math.floor((c - lo) / w); if (k >= n) k = n - 1; if (k < 0) k = 0; b[k].count++; });
+    return b;
+  }, [d]);
+
+  const w52L = d?.week52Low, w52H = d?.week52High;
+  const rangePos = (v) => (w52L != null && w52H != null && w52H > w52L) ? Math.max(0, Math.min(100, ((v - w52L) / (w52H - w52L)) * 100)) : null;
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: mobile ? "flex-end" : "center", justifyContent: "center", zIndex: 50 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: 720, maxWidth: "100%", maxHeight: "92vh", overflowY: "auto", background: T.surface, border: `1px solid ${T.border}`, borderRadius: mobile ? "16px 16px 0 0" : 16, padding: mobile ? 18 : 24, fontFamily: T.sans }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 19, fontWeight: 800, color: T.text }}>{row.symbol}</div>
+            <div style={{ fontSize: 12.5, color: T.faint }}>{row.sector || "—"}{d?.exchange ? ` · ${d.exchange}` : ""}</div>
+          </div>
+          <button onClick={onClose} style={iconBtn}><X size={18} /></button>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr 1fr" : "repeat(4,1fr)", gap: 10, marginBottom: 18 }}>
+          <Stat label="Your avg" value={inr(avg)} />
+          <Stat label="Current" value={inr(live)} />
+          <Stat label="P&L" value={inr(pnl)} color={pnl >= 0 ? T.pos : T.neg} />
+          <Stat label="Return" value={pct(pnlPct)} color={pnl >= 0 ? T.pos : T.neg} />
+        </div>
+
+        {d === undefined && <Empty text="Loading price history…" />}
+        {d === null && (
+          <div style={{ color: T.muted, fontSize: 13, lineHeight: 1.6, background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, padding: 14 }}>
+            Live price history isn’t available right now (the feed is best-effort and may be temporarily down, or this scrip isn’t covered). Your entry vs current figures above are still accurate.
+          </div>
+        )}
+
+        {d && d.ok && (
+          <>
+            <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 8 }}>Price (1 year) vs your buy price</div>
+            <div style={{ height: 240, marginBottom: 8 }}>
+              <ResponsiveContainer>
+                <LineChart data={d.history}>
+                  <CartesianGrid stroke={CHART.grid} vertical={false} />
+                  <XAxis dataKey="date" tick={{ fill: CHART.axis, fontSize: 11 }} axisLine={{ stroke: CHART.grid }} tickLine={false} minTickGap={40} />
+                  <YAxis tick={{ fill: CHART.axis, fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={inrShort} width={60} domain={["auto", "auto"]} />
+                  <RTooltip {...tip} formatter={(v) => inr(v)} />
+                  <ReferenceLine y={avg} stroke={CHART.gold} strokeDasharray="5 4" />
+                  <Line type="monotone" dataKey="close" stroke={CHART.pos} strokeWidth={2} dot={false} name="Price" />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={{ display: "flex", gap: 16, fontSize: 11.5, color: T.muted, marginBottom: 18 }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 14, height: 2, background: CHART.pos }} /> Market price</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 14, height: 0, borderTop: `2px dashed ${CHART.gold}` }} /> Your avg ({inr(avg)})</span>
+            </div>
+
+            {w52L != null && w52H != null && (
+              <div style={{ marginBottom: 18 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 10 }}>52-week range</div>
+                <div style={{ position: "relative", height: 8, borderRadius: 4, background: T.surface2, marginBottom: 8 }}>
+                  {rangePos(live) != null && <span style={{ position: "absolute", left: `${rangePos(live)}%`, top: -4, width: 3, height: 16, background: CHART.pos, transform: "translateX(-50%)" }} />}
+                  {rangePos(avg) != null && <span style={{ position: "absolute", left: `${rangePos(avg)}%`, top: -4, width: 3, height: 16, background: CHART.gold, transform: "translateX(-50%)" }} />}
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: T.muted }}>
+                  <span>Low {inr(w52L)}</span><span>High {inr(w52H)}</span>
+                </div>
+                <div style={{ display: "flex", gap: 16, fontSize: 12.5, color: T.muted, marginTop: 12, flexWrap: "wrap" }}>
+                  {d.allTimeLow != null && <span>All-time low: <b style={{ color: T.text }}>{inr(d.allTimeLow)}</b></span>}
+                  {d.allTimeHigh != null && <span>All-time high: <b style={{ color: T.text }}>{inr(d.allTimeHigh)}</b></span>}
+                </div>
+              </div>
+            )}
+
+            {hist.length > 0 && (
+              <>
+                <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 8 }}>Where it traded (past year)</div>
+                <div style={{ height: 180 }}>
+                  <ResponsiveContainer>
+                    <BarChart data={hist}>
+                      <CartesianGrid stroke={CHART.grid} vertical={false} />
+                      <XAxis dataKey="label" tick={{ fill: CHART.axis, fontSize: 10 }} axisLine={{ stroke: CHART.grid }} tickLine={false} tickFormatter={inrShort} />
+                      <YAxis tick={{ fill: CHART.axis, fontSize: 10 }} axisLine={false} tickLine={false} width={28} />
+                      <RTooltip {...tip} formatter={(v) => `${v} days`} labelFormatter={(l) => `~${inr(l)}`} />
+                      <Bar dataKey="count" radius={[3, 3, 0, 0]} fill={CHART.gold} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const tdR = { padding: "11px 14px", textAlign: "right", whiteSpace: "nowrap" };
+
+/* ── owner: payment details (UPI) — persists across updates ────────── */
+function PaymentSettings() {
+  const [s, setS] = useState(null);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { getSettings().then(setS).catch(() => setS({ upi_id: "", payee: "Folio", amount: 99 })); }, []);
+  if (!s) return null;
+  const save = async () => {
+    setBusy(true); setMsg("");
+    try { await saveSettings({ upi_id: (s.upi_id || "").trim(), payee: (s.payee || "Folio").trim(), amount: Number(s.amount) || 99 }); setMsg("Saved. Payers will now see this UPI."); }
+    catch (e) { setMsg("Couldn't save. Make sure schema_settings.sql has been run."); }
+    finally { setBusy(false); }
+  };
+  const field = { width: "100%", padding: "9px 11px", borderRadius: 8, border: `1px solid ${T.border}`, background: T.bg, color: T.text, fontFamily: T.sans, fontSize: 13.5, outline: "none" };
+  const lbl = { fontSize: 12, color: T.muted, marginBottom: 4, display: "block" };
+  return (
+    <Panel style={{ marginBottom: 16 }}>
+      <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 12 }}>Payment details</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label style={lbl}>Your UPI ID</label>
+          <input style={field} value={s.upi_id || ""} placeholder="yourname@bank" onChange={(e) => setS({ ...s, upi_id: e.target.value })} />
+        </div>
+        <div>
+          <label style={lbl}>Payee name</label>
+          <input style={field} value={s.payee || ""} placeholder="Folio" onChange={(e) => setS({ ...s, payee: e.target.value })} />
+        </div>
+        <div>
+          <label style={lbl}>Amount (₹/month)</label>
+          <input style={field} type="number" value={s.amount ?? 99} onChange={(e) => setS({ ...s, amount: e.target.value })} />
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button onClick={save} disabled={busy} style={btnGold}><Save size={14} /> {busy ? "Saving…" : "Save"}</button>
+        {msg && <span style={{ fontSize: 12.5, color: T.muted }}>{msg}</span>}
+      </div>
+    </Panel>
+  );
+}
 
 /* ── owner admin: manage who has paid ─────────────────────────────── */
 function AdminPage({ mobile }) {
@@ -545,6 +724,7 @@ function AdminPage({ mobile }) {
 
   return (
     <>
+      <PaymentSettings />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 8 }}>
         <div style={{ fontSize: 15, fontWeight: 700 }}>
           Members <span style={{ color: T.faint, fontWeight: 400 }}>· {users ? users.length : "…"}</span>

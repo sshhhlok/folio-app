@@ -13,8 +13,11 @@ export const T = {
 export const CHART = { gold: "#C8902F", pos: "#1F9D57", neg: "#D64541", axis: "#8b95a1", grid: "rgba(128,128,128,0.18)" };
 
 export const PAYWALL = {
-  price: "₹99 / month",
-  upi: "9559778048-4@ybl",
+  // UPI now lives in the database (Admin → Payment details) so it survives
+  // every rebuild. This env value is only a last-resort fallback.
+  upi: import.meta.env.VITE_UPI_ID || "",
+  payee: "Folio",
+  amount: 99,
   note: "After paying, the owner will activate your account within a day.",
 };
 
