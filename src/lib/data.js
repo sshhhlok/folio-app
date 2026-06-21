@@ -100,8 +100,8 @@ export async function getSettings() {
 
 export async function saveSettings(s) {
   const { data, error } = await supabase.from("app_settings")
-    .update({ upi_id: s.upi_id, payee: s.payee, amount: s.amount, updated_at: new Date().toISOString() })
-    .eq("id", 1).select("upi_id,payee,amount").single();
+    .upsert({ id: 1, upi_id: s.upi_id, payee: s.payee, amount: s.amount, updated_at: new Date().toISOString() }, { onConflict: "id" })
+    .select("upi_id,payee,amount").single();
   if (error) throw error;
   return data;
 }

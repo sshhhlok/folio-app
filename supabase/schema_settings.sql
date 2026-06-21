@@ -1,5 +1,5 @@
--- Folio — app settings (payment/UPI). Lets the owner set UPI in-app so it
--- survives every code update. Requires is_owner() from schema_admin_fix.sql.
+-- Folio — app settings (payment/UPI). Self-contained: only needs the
+-- profiles table (from schema_paywall.sql). Run in Supabase SQL Editor.
 create table if not exists app_settings (
   id         int primary key default 1,
   upi_id     text default '',
@@ -17,4 +17,6 @@ create policy read_settings on app_settings for select using (true);
 
 drop policy if exists owner_write_settings on app_settings;
 create policy owner_write_settings on app_settings
-  for all using (is_owner()) with check (is_owner());
+  for all
+  using  (exists (select 1 from profiles p where p.id = auth.uid() and p.role = 'owner'))
+  with check (exists (select 1 from profiles p where p.id = auth.uid() and p.role = 'owner'));

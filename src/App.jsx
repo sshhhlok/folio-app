@@ -161,6 +161,9 @@ function Shell({ user, isOwner }) {
     setForm(null);
   };
   const remove = async (id) => { try { await deleteHolding(id); setHoldings((hs) => hs.filter((x) => x.id !== id)); } catch (e) { console.error(e); } };
+  const removeMany = async (ids) => {
+    try { for (const id of ids) await deleteHolding(id); setHoldings((hs) => hs.filter((x) => !ids.includes(x.id))); } catch (e) { console.error(e); }
+  };
   const removeBySymbol = async (sym) => { const h = holdings.find((x) => x.symbol?.toUpperCase() === String(sym).toUpperCase()); if (h) await remove(h.id); };
   const addQuick = async (h) => { try { const a = await addHolding(user.id, { sector: "", tier: "Medium", ...h }); setHoldings((hs) => [...hs, a]); } catch (e) { console.error(e); } };
 
@@ -293,7 +296,7 @@ function Shell({ user, isOwner }) {
         {page === "holdings" && (
           <HoldingsPage
             rows={rows} filter={filter} setFilter={setFilter} mobile={mobile}
-            onAdd={() => setForm({})} onEdit={(r) => setForm(r)} onDelete={remove} onView={setDetail}
+            onAdd={() => setForm({})} onEdit={(r) => setForm(r)} onDelete={remove} onDeleteMany={removeMany} onView={setDetail}
             onRefresh={refreshPrices} refreshing={refreshing}
             onImport={handleImport} importing={importing} importMsg={importMsg}
           />
@@ -427,8 +430,9 @@ function AllocPie({ rows, groupBy, mobile }) {
   );
 }
 
-function HoldingsPage({ rows, filter, setFilter, mobile, onAdd, onEdit, onDelete, onView, onRefresh, refreshing, onImport, importing, importMsg }) {
+function HoldingsPage({ rows, filter, setFilter, mobile, onAdd, onEdit, onDelete, onDeleteMany, onView, onRefresh, refreshing, onImport, importing, importMsg }) {
   const fileRef = useRef(null);
+  const [sel, setSel] = useState(() => new Set());
   const filtered = useMemo(() => {
     if (!filter) return rows;
     if (filter.kind === "losers") return rows.filter((r) => r.pnl < 0);
@@ -438,6 +442,17 @@ function HoldingsPage({ rows, filter, setFilter, mobile, onAdd, onEdit, onDelete
   }, [rows, filter]);
   const flabel = filter ? (filter.kind === "tier" ? filter.value : filter.kind[0].toUpperCase() + filter.kind.slice(1)) : "";
 
+  const allSel = filtered.length > 0 && filtered.every((r) => sel.has(r.id));
+  const toggleOne = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleAll = () => setSel(() => allSel ? new Set() : new Set(filtered.map((r) => r.id)));
+  const deleteSelected = async () => {
+    const ids = [...sel];
+    if (!ids.length) return;
+    if (typeof window !== "undefined" && !window.confirm(`Delete ${ids.length} holding${ids.length === 1 ? "" : "s"}?`)) return;
+    await onDeleteMany(ids); setSel(new Set());
+  };
+  const cbStyle = { width: 16, height: 16, accentColor: "#C8902F", cursor: "pointer" };
+
   return (
     <>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 8, flexWrap: "wrap" }}>
@@ -446,6 +461,11 @@ function HoldingsPage({ rows, filter, setFilter, mobile, onAdd, onEdit, onDelete
           {filter && <button onClick={() => setFilter(null)} style={{ ...chip, marginLeft: 8 }}>{flabel} <X size={11} /></button>}
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {sel.size > 0 && (
+            <button onClick={deleteSelected} style={{ ...btnGhost, color: T.neg, borderColor: T.neg + "55" }}>
+              <Trash2 size={14} /> Delete selected ({sel.size})
+            </button>
+          )}
           <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }}
             onChange={(e) => { const f = e.target.files?.[0]; if (f) onImport(f); e.target.value = ""; }} />
           <button onClick={() => fileRef.current?.click()} disabled={importing} style={btnGhost}>
@@ -455,12 +475,18 @@ function HoldingsPage({ rows, filter, setFilter, mobile, onAdd, onEdit, onDelete
           <button onClick={onAdd} style={btnGold}><Plus size={15} /> Add</button>
         </div>
       </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, color: T.faint, fontSize: 12, marginBottom: 10 }}>
+        <LineIcon size={13} /> Tap a holding’s name for its detailed view — price trend, 52-week range and more.
+      </div>
       {importMsg && <div style={{ color: T.muted, fontSize: 12.5, marginBottom: 10 }}>{importMsg}</div>}
       <Panel pad={0}>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 640 }}>
             <thead>
               <tr style={{ color: T.muted }}>
+                <th style={{ padding: "11px 10px 11px 14px", textAlign: "left", borderBottom: `1px solid ${T.border}`, width: 36 }}>
+                  <input type="checkbox" checked={allSel} onChange={toggleAll} style={cbStyle} aria-label="Select all" />
+                </th>
                 {["Symbol", "Tier", "Qty", "Avg", "LTP", "Invested", "Value", "P&L", ""].map((h, i) => (
                   <th key={i} style={{ padding: "11px 14px", textAlign: i <= 1 ? "left" : "right", fontWeight: 600, borderBottom: `1px solid ${T.border}`, whiteSpace: "nowrap" }}>{h}</th>
                 ))}
@@ -468,7 +494,10 @@ function HoldingsPage({ rows, filter, setFilter, mobile, onAdd, onEdit, onDelete
             </thead>
             <tbody style={{ fontFamily: T.mono }}>
               {filtered.map((r) => (
-                <tr key={r.id} style={{ borderBottom: `1px solid ${T.border}` }}>
+                <tr key={r.id} style={{ borderBottom: `1px solid ${T.border}`, background: sel.has(r.id) ? T.gold + "11" : "transparent" }}>
+                  <td style={{ padding: "11px 10px 11px 14px" }}>
+                    <input type="checkbox" checked={sel.has(r.id)} onChange={() => toggleOne(r.id)} style={cbStyle} aria-label={`Select ${r.symbol}`} />
+                  </td>
                   <td style={{ padding: "11px 14px", fontWeight: 600, fontFamily: T.sans }}>
                     <button onClick={() => onView(r)} style={{ background: "none", border: "none", padding: 0, color: T.text, fontWeight: 600, fontFamily: T.sans, cursor: "pointer", fontSize: 13 }}>{r.symbol}</button>
                     <div style={{ color: T.faint, fontSize: 11 }}>{r.sector}</div>
@@ -487,7 +516,7 @@ function HoldingsPage({ rows, filter, setFilter, mobile, onAdd, onEdit, onDelete
                   </td>
                 </tr>
               ))}
-              {filtered.length === 0 && <tr><td colSpan={9} style={{ padding: 28, textAlign: "center", color: T.faint }}>No holdings match.</td></tr>}
+              {filtered.length === 0 && <tr><td colSpan={10} style={{ padding: 28, textAlign: "center", color: T.faint }}>No holdings match.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -554,16 +583,6 @@ function HoldingDetail({ row, onClose, mobile }) {
   const pnl = value - invested;
   const pnlPct = invested ? (pnl / invested) * 100 : 0;
 
-  const hist = useMemo(() => {
-    if (!d?.history?.length) return [];
-    const cl = d.history.map((h) => h.close);
-    const lo = Math.min(...cl), hi = Math.max(...cl);
-    const n = 10, w = (hi - lo) / n || 1;
-    const b = Array.from({ length: n }, (_, i) => ({ label: Math.round(lo + w * (i + 0.5)), count: 0 }));
-    cl.forEach((c) => { let k = Math.floor((c - lo) / w); if (k >= n) k = n - 1; if (k < 0) k = 0; b[k].count++; });
-    return b;
-  }, [d]);
-
   const w52L = d?.week52Low, w52H = d?.week52High;
   const rangePos = (v) => (w52L != null && w52H != null && w52H > w52L) ? Math.max(0, Math.min(100, ((v - w52L) / (w52H - w52L)) * 100)) : null;
 
@@ -583,6 +602,17 @@ function HoldingDetail({ row, onClose, mobile }) {
           <Stat label="Current" value={inr(live)} />
           <Stat label="P&L" value={inr(pnl)} color={pnl >= 0 ? T.pos : T.neg} />
           <Stat label="Return" value={pct(pnlPct)} color={pnl >= 0 ? T.pos : T.neg} />
+        </div>
+
+        <div style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, padding: 14, marginBottom: 18 }}>
+          <div style={{ fontSize: 12, color: T.muted, marginBottom: 4 }}>
+            About · {assetType(row) === "Equity" ? "Stock" : assetType(row)}{row.sector ? ` · ${row.sector}` : ""}{d?.exchange ? ` · ${d.exchange}` : ""}
+          </div>
+          <div style={{ fontSize: 13, color: T.text, lineHeight: 1.6 }}>
+            {d === undefined ? "Loading…"
+              : (d && d.about) ? d.about
+              : `${row.symbol} is ${assetType(row) === "ETF" ? "an exchange-traded fund" : "a listed " + (row.sector ? row.sector + " " : "") + "company"} in your portfolio. A detailed description isn’t available from the feed right now.`}
+          </div>
         </div>
 
         {d === undefined && <Empty text="Loading price history…" />}
@@ -629,17 +659,22 @@ function HoldingDetail({ row, onClose, mobile }) {
               </div>
             )}
 
-            {hist.length > 0 && (
+            {d.financials && d.financials.length > 0 && (
               <>
-                <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 8 }}>Where it traded (past year)</div>
-                <div style={{ height: 180 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 8 }}>Financials (last quarters)</div>
+                <div style={{ display: "flex", gap: 16, fontSize: 11.5, color: T.muted, marginBottom: 6 }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: CHART.gold }} /> Revenue</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: CHART.pos }} /> Earnings</span>
+                </div>
+                <div style={{ height: 200 }}>
                   <ResponsiveContainer>
-                    <BarChart data={hist}>
+                    <BarChart data={d.financials}>
                       <CartesianGrid stroke={CHART.grid} vertical={false} />
-                      <XAxis dataKey="label" tick={{ fill: CHART.axis, fontSize: 10 }} axisLine={{ stroke: CHART.grid }} tickLine={false} tickFormatter={inrShort} />
-                      <YAxis tick={{ fill: CHART.axis, fontSize: 10 }} axisLine={false} tickLine={false} width={28} />
-                      <RTooltip {...tip} formatter={(v) => `${v} days`} labelFormatter={(l) => `~${inr(l)}`} />
-                      <Bar dataKey="count" radius={[3, 3, 0, 0]} fill={CHART.gold} />
+                      <XAxis dataKey="label" tick={{ fill: CHART.axis, fontSize: 11 }} axisLine={{ stroke: CHART.grid }} tickLine={false} />
+                      <YAxis tick={{ fill: CHART.axis, fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={inrShort} width={56} />
+                      <RTooltip {...tip} formatter={(v) => inr(v)} />
+                      <Bar dataKey="revenue" name="Revenue" fill={CHART.gold} radius={[3, 3, 0, 0]} />
+                      <Bar dataKey="earnings" name="Earnings" fill={CHART.pos} radius={[3, 3, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -664,7 +699,7 @@ function PaymentSettings() {
   const save = async () => {
     setBusy(true); setMsg("");
     try { await saveSettings({ upi_id: (s.upi_id || "").trim(), payee: (s.payee || "Folio").trim(), amount: Number(s.amount) || 99 }); setMsg("Saved. Payers will now see this UPI."); }
-    catch (e) { setMsg("Couldn't save. Make sure schema_settings.sql has been run."); }
+    catch (e) { setMsg(e?.message ? `Couldn't save: ${e.message}` : "Couldn't save. Make sure schema_settings.sql has been run."); }
     finally { setBusy(false); }
   };
   const field = { width: "100%", padding: "9px 11px", borderRadius: 8, border: `1px solid ${T.border}`, background: T.bg, color: T.text, fontFamily: T.sans, fontSize: 13.5, outline: "none" };
