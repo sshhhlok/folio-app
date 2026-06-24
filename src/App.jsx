@@ -215,6 +215,8 @@ function Shell({ user, isOwner, plan, hasBusiness, onSwitchPlan }) {
   const [refreshing, setRefreshing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState("");
+  const [clientErr, setClientErr] = useState("");
+  const importRef = useRef(null);
   const [w, setW] = useState(typeof window !== "undefined" ? window.innerWidth : 1000);
 
   useEffect(() => {
@@ -291,8 +293,9 @@ function Shell({ user, isOwner, plan, hasBusiness, onSwitchPlan }) {
   // Guarantees a client exists to attach holdings to (used by Basic plan).
   const ensureClient = async () => {
     if (clientId) return clientId;
+    setClientErr("");
     try { const c = await addClient(user.id, { name: "My Portfolio" }); setClients((cs) => [...cs, c].sort((a, b) => a.name.localeCompare(b.name))); setClientId(c.id); return c.id; }
-    catch (e) { console.error(e); return null; }
+    catch (e) { console.error(e); setClientErr(`Couldn't set up your portfolio: ${e?.message || e}. Run schema_all.sql in Supabase, then reload.`); return null; }
   };
   const removeBySymbol = async (sym) => { const h = holdings.find((x) => x.symbol?.toUpperCase() === String(sym).toUpperCase()); if (h) await remove(h.id); };
   const addQuick = async (h) => { try { const cid = clientId || await ensureClient(); if (!cid) return; const a = await addHolding(user.id, cid, { sector: "", tier: "Medium", ...h }); setHoldings((hs) => [...hs, a]); } catch (e) { console.error(e); } };
@@ -439,9 +442,17 @@ function Shell({ user, isOwner, plan, hasBusiness, onSwitchPlan }) {
               <>
                 <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Set up your portfolio</div>
                 <div style={{ color: T.muted, fontSize: 13.5, lineHeight: 1.6, maxWidth: 360, margin: "0 auto 20px" }}>
-                  Tap below to create your portfolio, then add holdings or import a broker file.
+                  Import your broker file (Zerodha, Groww, Upstox…) or add holdings manually.
                 </div>
-                <button onClick={ensureClient} style={{ ...btnGold, margin: "0 auto" }}><Plus size={15} /> Create my portfolio</button>
+                <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+                  <input ref={importRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }}
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.target.value = ""; }} />
+                  <button onClick={() => importRef.current?.click()} disabled={importing} style={btnGold}>
+                    {importing ? <RefreshCw size={14} className="spin" /> : <Upload size={15} />} {importing ? "Importing…" : "Import holdings"}
+                  </button>
+                  <button onClick={() => setForm({})} style={btnGhost}><Plus size={15} /> Add manually</button>
+                </div>
+                {(clientErr || importMsg) && <div style={{ color: clientErr ? T.neg : T.muted, fontSize: 12, marginTop: 14, lineHeight: 1.5, maxWidth: 380, marginInline: "auto" }}>{clientErr || importMsg}</div>}
               </>
             )}
           </Panel>
