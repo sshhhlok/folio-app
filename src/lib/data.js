@@ -1,15 +1,24 @@
 import { supabase } from "../supabaseClient";
 
-export async function fetchHoldings(userId) {
+export async function fetchHoldings(clientId) {
+  if (!clientId) return [];
   const { data, error } = await supabase
-    .from("holdings").select("*").eq("user_id", userId).order("created_at", { ascending: true });
+    .from("holdings").select("*").eq("client_id", clientId).order("created_at", { ascending: true });
   if (error) throw error;
   return data || [];
 }
 
-export async function addHolding(userId, h) {
+// All holdings across every client of an advisor (for the advisor dashboard).
+export async function fetchAllHoldings(advisorId) {
+  const { data, error } = await supabase
+    .from("holdings").select("*").eq("user_id", advisorId);
+  if (error) throw error;
+  return data || [];
+}
+
+export async function addHolding(userId, clientId, h) {
   const { data, error } = await supabase.from("holdings")
-    .insert({ ...h, user_id: userId }).select().single();
+    .insert({ ...h, user_id: userId, client_id: clientId }).select().single();
   if (error) throw error;
   return data;
 }
@@ -26,16 +35,17 @@ export async function deleteHolding(id) {
   if (error) throw error;
 }
 
-export async function fetchSnapshots(userId) {
+export async function fetchSnapshots(clientId) {
+  if (!clientId) return [];
   const { data, error } = await supabase
-    .from("snapshots").select("*").eq("user_id", userId).order("date", { ascending: true });
+    .from("snapshots").select("*").eq("client_id", clientId).order("date", { ascending: true });
   if (error) throw error;
   return data || [];
 }
 
-export async function saveSnapshot(userId, date, value) {
+export async function saveSnapshot(userId, clientId, date, value) {
   const { data, error } = await supabase.from("snapshots")
-    .upsert({ user_id: userId, date, value }, { onConflict: "user_id,date" }).select().single();
+    .upsert({ user_id: userId, client_id: clientId, date, value }, { onConflict: "user_id,date" }).select().single();
   if (error) throw error;
   return data;
 }
@@ -74,17 +84,18 @@ export async function setProfilePaid(userId, paid, days = 30) {
 }
 
 /* ── invested-journey (from tradebook) ────────────────────────────── */
-export async function fetchJourney(userId) {
+export async function fetchJourney(clientId) {
+  if (!clientId) return [];
   const { data, error } = await supabase
-    .from("journey").select("date,invested").eq("user_id", userId).order("date", { ascending: true });
+    .from("journey").select("date,invested").eq("client_id", clientId).order("date", { ascending: true });
   if (error) throw error;
   return data || [];
 }
 
-export async function saveJourney(userId, series) {
-  await supabase.from("journey").delete().eq("user_id", userId);
+export async function saveJourney(userId, clientId, series) {
+  await supabase.from("journey").delete().eq("client_id", clientId);
   if (!series.length) return [];
-  const rows = series.map((p) => ({ user_id: userId, date: p.date, invested: p.invested }));
+  const rows = series.map((p) => ({ user_id: userId, client_id: clientId, date: p.date, invested: p.invested }));
   const { data, error } = await supabase.from("journey").insert(rows).select("date,invested");
   if (error) throw error;
   return data || [];
@@ -104,4 +115,69 @@ export async function saveSettings(s) {
     .select("upi_id,payee,amount").single();
   if (error) throw error;
   return data;
+}
+
+/* ── clients (advisor's book) ─────────────────────────────────────── */
+export async function fetchClients(advisorId) {
+  const { data, error } = await supabase
+    .from("clients").select("*").eq("advisor_id", advisorId).order("name", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+export async function addClient(advisorId, c) {
+  const { data, error } = await supabase.from("clients")
+    .insert({ ...c, advisor_id: advisorId }).select().single();
+  if (error) throw error;
+  return data;
+}
+export async function updateClient(id, fields) {
+  const { data, error } = await supabase.from("clients").update(fields).eq("id", id).select().single();
+  if (error) throw error;
+  return data;
+}
+export async function deleteClient(id) {
+  const { error } = await supabase.from("clients").delete().eq("id", id);
+  if (error) throw error;
+}
+
+/* ── CRM: notes ───────────────────────────────────────────────────── */
+export async function fetchNotes(clientId) {
+  if (!clientId) return [];
+  const { data, error } = await supabase
+    .from("client_notes").select("*").eq("client_id", clientId).order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+export async function addNote(advisorId, clientId, body) {
+  const { data, error } = await supabase.from("client_notes")
+    .insert({ advisor_id: advisorId, client_id: clientId, body }).select().single();
+  if (error) throw error;
+  return data;
+}
+export async function deleteNote(id) {
+  const { error } = await supabase.from("client_notes").delete().eq("id", id);
+  if (error) throw error;
+}
+
+/* ── CRM: tasks / reminders ───────────────────────────────────────── */
+export async function fetchTasks(advisorId) {
+  const { data, error } = await supabase
+    .from("client_tasks").select("*").eq("advisor_id", advisorId).order("due_date", { ascending: true, nullsFirst: false });
+  if (error) throw error;
+  return data || [];
+}
+export async function addTask(advisorId, clientId, title, due_date) {
+  const { data, error } = await supabase.from("client_tasks")
+    .insert({ advisor_id: advisorId, client_id: clientId || null, title, due_date: due_date || null }).select().single();
+  if (error) throw error;
+  return data;
+}
+export async function toggleTask(id, done) {
+  const { data, error } = await supabase.from("client_tasks").update({ done }).eq("id", id).select().single();
+  if (error) throw error;
+  return data;
+}
+export async function deleteTask(id) {
+  const { error } = await supabase.from("client_tasks").delete().eq("id", id);
+  if (error) throw error;
 }

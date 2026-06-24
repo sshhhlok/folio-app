@@ -7,17 +7,21 @@ import {
   LayoutDashboard, ListOrdered, Plus, Pencil, Trash2, Save,
   LogOut, RefreshCw, X, PieChart as PieIcon, BarChart3, LineChart as LineIcon,
   Users, Lock, Check, IndianRupee, Upload, Sun, Moon, TrendingUp,
+  UserPlus, Calculator, Briefcase, CalendarClock, StickyNote, ChevronLeft, Cake, ChevronDown,
 } from "lucide-react";
 
 import { T, CHART, TIERS, PIE, PAYWALL, getTheme, setTheme, assetType } from "./theme";
 import { supabase, configured } from "./supabaseClient";
 import { inr, inrShort, pct, num, today, withCalc } from "./lib/format";
 import {
-  fetchHoldings, addHolding, updateHolding, deleteHolding,
+  fetchHoldings, fetchAllHoldings, addHolding, updateHolding, deleteHolding,
   fetchSnapshots, saveSnapshot,
   fetchMyProfile, listProfiles, setProfilePaid,
   fetchJourney, saveJourney,
   getSettings, saveSettings,
+  fetchClients, addClient, updateClient, deleteClient,
+  fetchNotes, addNote, deleteNote,
+  fetchTasks, addTask, toggleTask, deleteTask,
 } from "./lib/data";
 import {
   Center, Panel, Stat, Seg, Logo, Empty, btnGold, btnGhost, iconBtn, chip, tip,
@@ -115,6 +119,10 @@ function Shell({ user, isOwner }) {
   const [holdings, setHoldings] = useState([]);
   const [journey, setJourney] = useState([]);
   const [snaps, setSnaps] = useState([]);
+  const [clients, setClients] = useState([]);
+  const [clientsLoaded, setClientsLoaded] = useState(false);
+  const [clientId, setClientIdRaw] = useState(() => { try { return localStorage.getItem("folio-client") || null; } catch { return null; } });
+  const setClientId = (id) => { try { id ? localStorage.setItem("folio-client", id) : localStorage.removeItem("folio-client"); } catch {} setClientIdRaw(id); };
   const [loading, setLoading] = useState(true);
   const [chart, setChart] = useState("pie");
   const [groupBy, setGroupBy] = useState("holding");
@@ -132,17 +140,33 @@ function Shell({ user, isOwner }) {
   }, []);
   const mobile = w < 760;
 
+  // Load the advisor's client book once.
   useEffect(() => {
     (async () => {
-      // Load each independently — a failure in one (e.g. journey table not
-      // created yet) must never wipe the others. This was causing holdings
-      // to appear "lost" on every reopen.
-      try { setHoldings(await fetchHoldings(user.id)); } catch (e) { console.error("holdings", e); }
-      try { setSnaps(await fetchSnapshots(user.id)); } catch (e) { console.error("snaps", e); }
-      try { setJourney(await fetchJourney(user.id)); } catch (e) { console.error("journey", e); }
-      setLoading(false);
+      try {
+        const cs = await fetchClients(user.id);
+        setClients(cs);
+        setClientIdRaw((cur) => (cur && cs.some((c) => c.id === cur)) ? cur : (cs[0]?.id || null));
+      } catch (e) { console.error("clients", e); }
+      finally { setClientsLoaded(true); }
     })();
   }, [user.id]);
+
+  // Load the selected client's portfolio. Each source loads independently so
+  // one failure can't wipe the others.
+  useEffect(() => {
+    if (!clientsLoaded) return;
+    if (!clientId) { setHoldings([]); setSnaps([]); setJourney([]); setLoading(false); return; }
+    setLoading(true);
+    (async () => {
+      try { setHoldings(await fetchHoldings(clientId)); } catch (e) { console.error("holdings", e); }
+      try { setSnaps(await fetchSnapshots(clientId)); } catch (e) { console.error("snaps", e); }
+      try { setJourney(await fetchJourney(clientId)); } catch (e) { console.error("journey", e); }
+      setLoading(false);
+    })();
+  }, [clientId, clientsLoaded]);
+
+  const activeClient = useMemo(() => clients.find((c) => c.id === clientId) || null, [clients, clientId]);
 
   const rows = useMemo(() => holdings.map(withCalc), [holdings]);
   const totals = useMemo(() => {
@@ -156,7 +180,7 @@ function Shell({ user, isOwner }) {
   const onSave = async (h) => {
     try {
       if (form && form.id) { const u = await updateHolding(form.id, h); setHoldings((hs) => hs.map((x) => x.id === u.id ? u : x)); }
-      else { const a = await addHolding(user.id, h); setHoldings((hs) => [...hs, a]); }
+      else { const a = await addHolding(user.id, clientId, h); setHoldings((hs) => [...hs, a]); }
     } catch (e) { console.error(e); }
     setForm(null);
   };
@@ -164,12 +188,21 @@ function Shell({ user, isOwner }) {
   const removeMany = async (ids) => {
     try { for (const id of ids) await deleteHolding(id); setHoldings((hs) => hs.filter((x) => !ids.includes(x.id))); } catch (e) { console.error(e); }
   };
+  const saveClient = async (c) => {
+    try {
+      if (c.id) { const u = await updateClient(c.id, c); setClients((cs) => cs.map((x) => x.id === u.id ? u : x).sort((a, b) => a.name.localeCompare(b.name))); return u; }
+      const a = await addClient(user.id, c); setClients((cs) => [...cs, a].sort((x, y) => x.name.localeCompare(y.name))); setClientId(a.id); return a;
+    } catch (e) { console.error(e); }
+  };
+  const removeClient = async (id) => {
+    try { await deleteClient(id); setClients((cs) => cs.filter((x) => x.id !== id)); if (clientId === id) setClientId(null); } catch (e) { console.error(e); }
+  };
   const removeBySymbol = async (sym) => { const h = holdings.find((x) => x.symbol?.toUpperCase() === String(sym).toUpperCase()); if (h) await remove(h.id); };
-  const addQuick = async (h) => { try { const a = await addHolding(user.id, { sector: "", tier: "Medium", ...h }); setHoldings((hs) => [...hs, a]); } catch (e) { console.error(e); } };
+  const addQuick = async (h) => { try { const a = await addHolding(user.id, clientId, { sector: "", tier: "Medium", ...h }); setHoldings((hs) => [...hs, a]); } catch (e) { console.error(e); } };
 
   const snapshot = async () => {
     const d = today(); const v = Math.round(totals.value);
-    try { const s = await saveSnapshot(user.id, d, v); setSnaps((p) => [...p.filter((x) => x.date !== d), s].sort((a, b) => a.date.localeCompare(b.date))); } catch (e) { console.error(e); }
+    try { const s = await saveSnapshot(user.id, clientId, d, v); setSnaps((p) => [...p.filter((x) => x.date !== d), s].sort((a, b) => a.date.localeCompare(b.date))); } catch (e) { console.error(e); }
   };
 
   const refreshPrices = async () => {
@@ -196,7 +229,7 @@ function Shell({ user, isOwner }) {
       const have = new Set(holdings.map((h) => h.symbol.toUpperCase()));
       const fresh = parsed.filter((p) => !have.has(p.symbol.toUpperCase()));
       const added = [];
-      for (const p of fresh) { const a = await addHolding(user.id, p); added.push(a); }
+      for (const p of fresh) { const a = await addHolding(user.id, clientId, p); added.push(a); }
       setHoldings((hs) => [...hs, ...added]);
       const skipped = parsed.length - added.length;
       setImportMsg(`Imported ${added.length} holding${added.length === 1 ? "" : "s"}${skipped ? `, skipped ${skipped} already in your list` : ""}.`);
@@ -209,7 +242,7 @@ function Shell({ user, isOwner }) {
     setImporting(true); setImportMsg("");
     try {
       const series = await parseTradebook(file);
-      const saved = await saveJourney(user.id, series);
+      const saved = await saveJourney(user.id, clientId, series);
       setJourney(saved);
       setImportMsg(`Investment journey built from ${series.length} dates.`);
     } catch (e) {
@@ -229,10 +262,11 @@ function Shell({ user, isOwner }) {
     }
   }, [holdings]);
 
-  if (loading) return <Center><div style={{ color: T.muted, fontFamily: T.sans }}>Loading your portfolio…</div></Center>;
+  if (!clientsLoaded) return <Center><div style={{ color: T.muted, fontFamily: T.sans }}>Loading…</div></Center>;
 
-  const tabs = [["dashboard", LayoutDashboard, "Dashboard"], ["holdings", ListOrdered, "Holdings"], ["analytics", PieIcon, "Analytics"]];
+  const tabs = [["dashboard", LayoutDashboard, "Dashboard"], ["holdings", ListOrdered, "Holdings"], ["analytics", PieIcon, "Analytics"], ["clients", Briefcase, "Clients"], ["tools", Calculator, "Tools"]];
   if (isOwner) tabs.push(["admin", Users, "Admin"]);
+  const portfolioPage = page === "dashboard" || page === "holdings" || page === "analytics";
 
   return (
     <div style={{ minHeight: "100vh", background: T.bg, fontFamily: T.sans, color: T.text, paddingBottom: mobile ? 72 : 0 }}>
@@ -241,6 +275,17 @@ function Shell({ user, isOwner }) {
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <Logo size={26} />
           <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: -0.3 }}>Folio</span>
+          {clients.length > 0 && (
+            <div style={{ position: "relative", display: "flex", alignItems: "center", marginLeft: 4 }}>
+              <span style={{ color: T.faint, marginRight: 8 }}>·</span>
+              <Briefcase size={14} color={T.muted} />
+              <select value={clientId || ""} onChange={(e) => { setClientId(e.target.value || null); if (!portfolioPage) setPage("dashboard"); }}
+                style={{ appearance: "none", WebkitAppearance: "none", background: "transparent", border: "none", color: T.text, fontFamily: T.sans, fontSize: 13.5, fontWeight: 600, padding: "4px 18px 4px 6px", cursor: "pointer", maxWidth: mobile ? 130 : 220, textOverflow: "ellipsis" }}>
+                {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <ChevronDown size={14} color={T.muted} style={{ marginLeft: -16, pointerEvents: "none" }} />
+            </div>
+          )}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {!mobile && tabs.map(([id, Icon, label]) => (
@@ -256,25 +301,44 @@ function Shell({ user, isOwner }) {
       </div>
 
       <div style={{ maxWidth: 1120, margin: "0 auto", padding: mobile ? 16 : "24px 28px" }}>
-        {/* summary always on top */}
-        <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr 1fr" : "repeat(4,1fr)", gap: 12, marginBottom: 20 }}>
-          <Stat label="Invested" value={inr(totals.invested)} />
-          <Stat label="Current value" value={inr(totals.value)} />
-          <Stat label="Total P&L" value={inr(totals.pnl)} color={totals.pnl >= 0 ? T.pos : T.neg} />
-          <Stat label="Return" value={pct(totals.pnlPct)} color={totals.pnl >= 0 ? T.pos : T.neg} />
-        </div>
+        {portfolioPage && clientId && (
+          <>
+            {!mobile && <div style={{ fontSize: 13, color: T.muted, marginBottom: 10 }}>{activeClient?.name}</div>}
+            <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr 1fr" : "repeat(4,1fr)", gap: 12, marginBottom: 20 }}>
+              <Stat label="Invested" value={inr(totals.invested)} />
+              <Stat label="Current value" value={inr(totals.value)} />
+              <Stat label="Total P&L" value={inr(totals.pnl)} color={totals.pnl >= 0 ? T.pos : T.neg} />
+              <Stat label="Return" value={pct(totals.pnlPct)} color={totals.pnl >= 0 ? T.pos : T.neg} />
+            </div>
+          </>
+        )}
 
-        {page === "dashboard" && (
+        {portfolioPage && !clientId && (
+          <Panel style={{ textAlign: "center", padding: mobile ? "32px 20px" : "48px 28px" }}>
+            <div style={{ width: 52, height: 52, borderRadius: 14, background: T.gold + "22", display: "grid", placeItems: "center", margin: "0 auto 16px" }}>
+              <Briefcase size={26} color={T.gold} />
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>No client selected</div>
+            <div style={{ color: T.muted, fontSize: 13.5, lineHeight: 1.6, maxWidth: 360, margin: "0 auto 20px" }}>
+              Add your first client to start tracking a portfolio. Each client gets their own holdings, charts and journey.
+            </div>
+            <button onClick={() => setPage("clients")} style={{ ...btnGold, margin: "0 auto" }}><UserPlus size={15} /> Go to Clients</button>
+          </Panel>
+        )}
+
+        {portfolioPage && clientId && loading && <Panel><Empty text="Loading…" /></Panel>}
+
+        {clientId && !loading && page === "dashboard" && (
           rows.length === 0 ? (
             <Panel style={{ textAlign: "center", padding: mobile ? "32px 20px" : "48px 28px" }}>
               <div style={{ width: 52, height: 52, borderRadius: 14, background: T.gold + "22", display: "grid", placeItems: "center", margin: "0 auto 16px" }}>
                 <Plus size={26} color={T.gold} />
               </div>
-              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Welcome to Folio</div>
+              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>{activeClient?.name}’s portfolio is empty</div>
               <div style={{ color: T.muted, fontSize: 13.5, lineHeight: 1.6, maxWidth: 360, margin: "0 auto 20px" }}>
-                Your portfolio is empty. Add your holdings to see your value, charts and trends.
+                Add holdings or import a broker file to see value, charts and trends.
               </div>
-              <button onClick={() => setForm({})} style={{ ...btnGold, margin: "0 auto" }}><Plus size={15} /> Add your first holding</button>
+              <button onClick={() => setForm({})} style={{ ...btnGold, margin: "0 auto" }}><Plus size={15} /> Add first holding</button>
             </Panel>
           ) : (
             <>
@@ -293,7 +357,7 @@ function Shell({ user, isOwner }) {
           )
         )}
 
-        {page === "holdings" && (
+        {clientId && !loading && page === "holdings" && (
           <HoldingsPage
             rows={rows} filter={filter} setFilter={setFilter} mobile={mobile}
             onAdd={() => setForm({})} onEdit={(r) => setForm(r)} onDelete={remove} onDeleteMany={removeMany} onView={setDetail}
@@ -302,9 +366,16 @@ function Shell({ user, isOwner }) {
           />
         )}
 
-        {page === "analytics" && (
+        {clientId && !loading && page === "analytics" && (
           <AnalyticsPage rows={rows} snaps={snaps} chart={chart} setChart={setChart} groupBy={groupBy} setGroupBy={setGroupBy} onSnapshot={snapshot} mobile={mobile} />
         )}
+
+        {page === "clients" && (
+          <ClientsPage user={user} clients={clients} clientId={clientId} setClientId={setClientId}
+            onSave={saveClient} onRemove={removeClient} goPortfolio={() => setPage("dashboard")} mobile={mobile} />
+        )}
+
+        {page === "tools" && <ToolsPage mobile={mobile} />}
 
         {page === "admin" && isOwner && <AdminPage mobile={mobile} />}
 
@@ -688,6 +759,261 @@ function HoldingDetail({ row, onClose, mobile }) {
 }
 
 const tdR = { padding: "11px 14px", textAlign: "right", whiteSpace: "nowrap" };
+
+function upcomingBirthday(dob) {
+  if (!dob) return null;
+  const d = new Date(dob); if (isNaN(d)) return null;
+  const now = new Date();
+  const todayD = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let next = new Date(now.getFullYear(), d.getMonth(), d.getDate());
+  if (next < todayD) next = new Date(now.getFullYear() + 1, d.getMonth(), d.getDate());
+  const days = Math.round((next - todayD) / 86400000);
+  if (days > 30) return null;
+  const dd = next.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+  if (days === 0) return `Birthday today (${dd})!`;
+  return `Birthday in ${days} day${days === 1 ? "" : "s"} (${dd})`;
+}
+
+const cField = { width: "100%", padding: "9px 11px", borderRadius: 8, border: `1px solid ${T.border}`, background: T.bg, color: T.text, fontFamily: T.sans, fontSize: 13.5, outline: "none" };
+const cLbl = { fontSize: 12, color: T.muted, marginBottom: 4, display: "block" };
+
+function ClientForm({ initial, onSave, onClose, mobile }) {
+  const [c, setC] = useState(initial || { name: "", email: "", phone: "", pan: "", dob: "", family_group: "", nominee: "", risk_profile: "", notes: "" });
+  const set = (k, v) => setC((p) => ({ ...p, [k]: v }));
+  const submit = () => { if (!c.name.trim()) return; const payload = { ...c, dob: c.dob || null }; if (initial?.id) payload.id = initial.id; onSave(payload); };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: mobile ? "flex-end" : "center", justifyContent: "center", zIndex: 60 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: 480, maxWidth: "100%", maxHeight: "92vh", overflowY: "auto", background: T.surface, border: `1px solid ${T.border}`, borderRadius: mobile ? "16px 16px 0 0" : 16, padding: mobile ? 18 : 24, fontFamily: T.sans }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>{initial?.id ? "Edit client" : "New client"}</div>
+          <button onClick={onClose} style={iconBtn}><X size={18} /></button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr", gap: 10 }}>
+          <div style={{ gridColumn: "1 / -1" }}><label style={cLbl}>Name *</label><input style={cField} value={c.name} onChange={(e) => set("name", e.target.value)} /></div>
+          <div><label style={cLbl}>Email</label><input style={cField} value={c.email} onChange={(e) => set("email", e.target.value)} /></div>
+          <div><label style={cLbl}>Phone</label><input style={cField} value={c.phone} onChange={(e) => set("phone", e.target.value)} /></div>
+          <div><label style={cLbl}>PAN</label><input style={cField} value={c.pan} onChange={(e) => set("pan", e.target.value.toUpperCase())} /></div>
+          <div><label style={cLbl}>Date of birth</label><input type="date" style={cField} value={c.dob || ""} onChange={(e) => set("dob", e.target.value)} /></div>
+          <div><label style={cLbl}>Family group</label><input style={cField} value={c.family_group} onChange={(e) => set("family_group", e.target.value)} placeholder="e.g. Sharma family" /></div>
+          <div><label style={cLbl}>Nominee</label><input style={cField} value={c.nominee} onChange={(e) => set("nominee", e.target.value)} /></div>
+          <div style={{ gridColumn: "1 / -1" }}><label style={cLbl}>Risk profile</label>
+            <select style={cField} value={c.risk_profile} onChange={(e) => set("risk_profile", e.target.value)}>
+              <option value="">—</option><option>Conservative</option><option>Moderate</option><option>Aggressive</option>
+            </select>
+          </div>
+          <div style={{ gridColumn: "1 / -1" }}><label style={cLbl}>Profile note</label><input style={cField} value={c.notes} onChange={(e) => set("notes", e.target.value)} /></div>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+          <button onClick={onClose} style={btnGhost}>Cancel</button>
+          <button onClick={submit} style={btnGold}><Save size={14} /> Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ClientCRM({ user, clientId, mobile }) {
+  const [notes, setNotes] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [nb, setNb] = useState("");
+  const [tt, setTt] = useState(""); const [td, setTd] = useState("");
+  useEffect(() => {
+    fetchNotes(clientId).then(setNotes).catch(() => setNotes([]));
+    fetchTasks(user.id).then((all) => setTasks(all.filter((t) => t.client_id === clientId))).catch(() => setTasks([]));
+  }, [clientId, user.id]);
+  const addN = async () => { if (!nb.trim()) return; try { const n = await addNote(user.id, clientId, nb.trim()); setNotes((x) => [n, ...x]); setNb(""); } catch (e) { console.error(e); } };
+  const delN = async (id) => { try { await deleteNote(id); setNotes((x) => x.filter((n) => n.id !== id)); } catch (e) { console.error(e); } };
+  const addT = async () => { if (!tt.trim()) return; try { const t = await addTask(user.id, clientId, tt.trim(), td || null); setTasks((x) => [...x, t]); setTt(""); setTd(""); } catch (e) { console.error(e); } };
+  const togT = async (t) => { try { const u = await toggleTask(t.id, !t.done); setTasks((x) => x.map((y) => y.id === u.id ? u : y)); } catch (e) { console.error(e); } };
+  const delT = async (id) => { try { await deleteTask(id); setTasks((x) => x.filter((y) => y.id !== id)); } catch (e) { console.error(e); } };
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr", gap: 12 }}>
+      <Panel>
+        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}><CalendarClock size={15} /> Tasks & reminders</div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+          <input value={tt} onChange={(e) => setTt(e.target.value)} placeholder="e.g. Call about SIP" style={{ ...cField, flex: 2, minWidth: 120 }} />
+          <input value={td} onChange={(e) => setTd(e.target.value)} type="date" style={{ ...cField, flex: 1, minWidth: 120 }} />
+          <button onClick={addT} style={btnGhost}><Plus size={14} /></button>
+        </div>
+        {tasks.length === 0 ? <Empty text="No tasks." /> : tasks.map((t) => (
+          <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 0", borderTop: `1px solid ${T.border}` }}>
+            <input type="checkbox" checked={t.done} onChange={() => togT(t)} style={{ width: 16, height: 16, accentColor: "#C8902F" }} />
+            <div style={{ flex: 1, fontSize: 13, textDecoration: t.done ? "line-through" : "none", color: t.done ? T.faint : T.text }}>{t.title}{t.due_date ? <span style={{ color: T.faint, fontSize: 11.5 }}> · {t.due_date}</span> : null}</div>
+            <button onClick={() => delT(t.id)} style={iconBtn}><X size={13} /></button>
+          </div>
+        ))}
+      </Panel>
+      <Panel>
+        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}><StickyNote size={15} /> Notes</div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+          <input value={nb} onChange={(e) => setNb(e.target.value)} placeholder="Meeting note…" style={{ ...cField, flex: 1 }} />
+          <button onClick={addN} style={btnGhost}><Plus size={14} /></button>
+        </div>
+        {notes.length === 0 ? <Empty text="No notes yet." /> : notes.map((n) => (
+          <div key={n.id} style={{ display: "flex", gap: 8, padding: "8px 0", borderTop: `1px solid ${T.border}` }}>
+            <div style={{ flex: 1, fontSize: 13, color: T.text, lineHeight: 1.5 }}>{n.body}<div style={{ color: T.faint, fontSize: 10.5, marginTop: 2 }}>{new Date(n.created_at).toLocaleDateString("en-IN")}</div></div>
+            <button onClick={() => delN(n.id)} style={iconBtn}><X size={13} /></button>
+          </div>
+        ))}
+      </Panel>
+    </div>
+  );
+}
+
+function ClientDetail({ user, client, stats, onBack, onEdit, onRemove, onOpenPortfolio, mobile }) {
+  const v = stats || { value: 0, invested: 0 };
+  const pnl = v.value - v.invested;
+  const bday = upcomingBirthday(client.dob);
+  return (
+    <>
+      <button onClick={onBack} style={{ ...btnGhost, marginBottom: 14 }}><ChevronLeft size={15} /> All clients</button>
+      <Panel style={{ marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 800 }}>{client.name}</div>
+            <div style={{ color: T.faint, fontSize: 12.5, marginTop: 2 }}>{[client.family_group, client.risk_profile].filter(Boolean).join(" · ") || "—"}</div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onEdit} style={btnGhost}><Pencil size={14} /> Edit</button>
+            <button onClick={onOpenPortfolio} style={btnGold}><Briefcase size={14} /> Open portfolio</button>
+          </div>
+        </div>
+        {bday && <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8, background: T.gold + "18", color: T.gold, padding: "8px 12px", borderRadius: 8, fontSize: 12.5 }}><Cake size={15} /> {bday}</div>}
+        <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr 1fr" : "repeat(4,1fr)", gap: 10, marginTop: 14 }}>
+          <Stat label="Value" value={inr(v.value)} />
+          <Stat label="Invested" value={inr(v.invested)} />
+          <Stat label="P&L" value={inr(pnl)} color={pnl >= 0 ? T.pos : T.neg} />
+          <Stat label="PAN" value={client.pan || "—"} />
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr", gap: 8, marginTop: 12, fontSize: 12.5, color: T.muted }}>
+          <div>Email: <span style={{ color: T.text }}>{client.email || "—"}</span></div>
+          <div>Phone: <span style={{ color: T.text }}>{client.phone || "—"}</span></div>
+          <div>Nominee: <span style={{ color: T.text }}>{client.nominee || "—"}</span></div>
+          <div>DOB: <span style={{ color: T.text }}>{client.dob || "—"}</span></div>
+        </div>
+        {client.notes && <div style={{ marginTop: 12, fontSize: 12.5, color: T.muted }}>Note: <span style={{ color: T.text }}>{client.notes}</span></div>}
+        <div style={{ marginTop: 14 }}>
+          <button onClick={onRemove} style={{ ...btnGhost, color: T.neg, borderColor: T.neg + "55" }}><Trash2 size={14} /> Delete client</button>
+        </div>
+      </Panel>
+      <ClientCRM user={user} clientId={client.id} mobile={mobile} />
+    </>
+  );
+}
+
+function ClientsPage({ user, clients, clientId, setClientId, onSave, onRemove, goPortfolio, mobile }) {
+  const [allH, setAllH] = useState([]);
+  const [detail, setDetail] = useState(null);
+  const [formC, setFormC] = useState(null);
+  useEffect(() => { fetchAllHoldings(user.id).then(setAllH).catch(() => setAllH([])); }, [user.id]);
+
+  const valByClient = useMemo(() => {
+    const m = {};
+    allH.forEach((h) => { const r = withCalc(h); const k = h.client_id; if (!k) return; m[k] = m[k] || { value: 0, invested: 0 }; m[k].value += r.value; m[k].invested += r.invested; });
+    return m;
+  }, [allH]);
+  const aum = useMemo(() => Object.values(valByClient).reduce((a, v) => a + v.value, 0), [valByClient]);
+
+  const save = async (c) => { const saved = await onSave(c); setFormC(null); if (saved && detail && detail.id === saved.id) setDetail(saved); };
+
+  if (detail) return (
+    <>
+      <ClientDetail user={user} client={detail} stats={valByClient[detail.id]} mobile={mobile}
+        onBack={() => setDetail(null)} onEdit={() => setFormC(detail)}
+        onRemove={async () => { await onRemove(detail.id); setDetail(null); }}
+        onOpenPortfolio={() => { setClientId(detail.id); goPortfolio(); }} />
+      {formC && <ClientForm initial={formC.id ? formC : null} onSave={save} onClose={() => setFormC(null)} mobile={mobile} />}
+    </>
+  );
+
+  return (
+    <>
+      <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr 1fr" : "repeat(3,1fr)", gap: 12, marginBottom: 18 }}>
+        <Stat label="Total AUM" value={inr(aum)} />
+        <Stat label="Clients" value={String(clients.length)} />
+        <Stat label="Avg / client" value={inr(clients.length ? aum / clients.length : 0)} />
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div style={{ fontSize: 15, fontWeight: 700 }}>Clients</div>
+        <button onClick={() => setFormC({})} style={btnGold}><UserPlus size={15} /> Add client</button>
+      </div>
+      {clients.length === 0 ? <Panel><Empty text="No clients yet. Add your first client to begin." /></Panel> : (
+        <Panel pad={0}>
+          {clients.map((c, i) => {
+            const v = valByClient[c.id] || { value: 0, invested: 0 };
+            const pnl = v.value - v.invested;
+            return (
+              <button key={c.id} onClick={() => setDetail(c)} style={{ display: "flex", width: "100%", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "13px 16px", background: c.id === clientId ? T.gold + "11" : "transparent", border: "none", borderTop: i ? `1px solid ${T.border}` : "none", cursor: "pointer", textAlign: "left", fontFamily: T.sans, color: T.text }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>{c.name}</div>
+                  <div style={{ color: T.faint, fontSize: 11.5 }}>{c.family_group ? c.family_group + " · " : ""}{c.pan || c.email || "—"}</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontFamily: T.mono, fontSize: 13.5 }}>{inr(v.value)}</div>
+                  <div style={{ fontFamily: T.mono, fontSize: 11.5, color: pnl >= 0 ? T.pos : T.neg }}>{inr(pnl)}</div>
+                </div>
+              </button>
+            );
+          })}
+        </Panel>
+      )}
+      {formC && <ClientForm initial={formC.id ? formC : null} onSave={save} onClose={() => setFormC(null)} mobile={mobile} />}
+    </>
+  );
+}
+
+function CalcCard({ title, fields, compute, note }) {
+  const [v, setV] = useState(() => Object.fromEntries(fields.map((f) => [f.k, f.def])));
+  const set = (k, val) => setV((p) => ({ ...p, [k]: val }));
+  let result;
+  try { result = compute(Object.fromEntries(Object.entries(v).map(([k, x]) => [k, parseFloat(x) || 0]))); } catch { result = null; }
+  return (
+    <Panel>
+      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>{title}</div>
+      <div style={{ display: "grid", gap: 8 }}>
+        {fields.map((f) => (
+          <div key={f.k} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <label style={{ flex: 1, fontSize: 12.5, color: T.muted }}>{f.label}</label>
+            <input type="number" value={v[f.k]} onChange={(e) => set(f.k, e.target.value)} style={{ ...cField, width: 120, fontFamily: T.mono, fontSize: 13 }} />
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+        <span style={{ fontSize: 12.5, color: T.muted }}>{note}</span>
+        <span style={{ fontSize: 18, fontWeight: 800, color: T.gold, fontFamily: T.mono }}>{result == null || !isFinite(result) ? "—" : inr(Math.round(result))}</span>
+      </div>
+    </Panel>
+  );
+}
+
+function ToolsPage({ mobile }) {
+  return (
+    <>
+      <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Planning tools</div>
+      <div style={{ color: T.faint, fontSize: 12.5, marginBottom: 16 }}>Quick calculators — estimates only, not advice.</div>
+      <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr", gap: 12 }}>
+        <CalcCard title="SIP future value" note="Maturity value"
+          fields={[{ k: "monthly", label: "Monthly invest (₹)", def: 10000 }, { k: "years", label: "Years", def: 10 }, { k: "rate", label: "Return % p.a.", def: 12 }]}
+          compute={(v) => { const i = v.rate / 1200, n = v.years * 12; return i ? v.monthly * ((Math.pow(1 + i, n) - 1) / i) * (1 + i) : v.monthly * n; }} />
+        <CalcCard title="Goal — required SIP" note="Monthly SIP needed"
+          fields={[{ k: "target", label: "Target (₹)", def: 5000000 }, { k: "years", label: "Years", def: 15 }, { k: "rate", label: "Return % p.a.", def: 12 }]}
+          compute={(v) => { const i = v.rate / 1200, n = v.years * 12; const f = i ? ((Math.pow(1 + i, n) - 1) / i) * (1 + i) : n; return f ? v.target / f : 0; }} />
+        <CalcCard title="Lumpsum growth" note="Future value"
+          fields={[{ k: "amount", label: "Amount (₹)", def: 100000 }, { k: "years", label: "Years", def: 10 }, { k: "rate", label: "Return % p.a.", def: 12 }]}
+          compute={(v) => v.amount * Math.pow(1 + v.rate / 100, v.years)} />
+        <CalcCard title="Loan EMI" note="Monthly EMI"
+          fields={[{ k: "loan", label: "Loan (₹)", def: 2500000 }, { k: "years", label: "Years", def: 20 }, { k: "rate", label: "Interest % p.a.", def: 8.5 }]}
+          compute={(v) => { const i = v.rate / 1200, n = v.years * 12; return i ? v.loan * i * Math.pow(1 + i, n) / (Math.pow(1 + i, n) - 1) : v.loan / n; }} />
+        <CalcCard title="Inflation impact" note="Future cost"
+          fields={[{ k: "amount", label: "Today's cost (₹)", def: 100000 }, { k: "years", label: "Years", def: 10 }, { k: "rate", label: "Inflation % p.a.", def: 6 }]}
+          compute={(v) => v.amount * Math.pow(1 + v.rate / 100, v.years)} />
+        <CalcCard title="Retirement corpus" note="Corpus needed (25×)"
+          fields={[{ k: "expense", label: "Monthly expense now (₹)", def: 50000 }, { k: "years", label: "Years to retire", def: 25 }, { k: "infl", label: "Inflation % p.a.", def: 6 }]}
+          compute={(v) => v.expense * 12 * Math.pow(1 + v.infl / 100, v.years) * 25} />
+      </div>
+    </>
+  );
+}
 
 /* ── owner: payment details (UPI) — persists across updates ────────── */
 function PaymentSettings() {
