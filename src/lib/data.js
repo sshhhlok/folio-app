@@ -62,7 +62,7 @@ export async function fetchMyProfile(userId) {
 export async function listProfiles() {
   const { data, error } = await supabase
     .from("profiles")
-    .select("id,email,role,is_paid,paid_until,created_at")
+    .select("id,email,role,is_paid,paid_until,basic_until,business_until,created_at")
     .order("created_at", { ascending: true });
   if (error) throw error;
   return data || [];
@@ -79,6 +79,18 @@ export async function setProfilePaid(userId, paid, days = 30) {
     .from("profiles")
     .update({ is_paid: paid, paid_until })
     .eq("id", userId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+// Activate / deactivate a specific plan for a member (owner only, via RLS).
+export async function setProfilePlanPaid(userId, plan, paid, days = 30) {
+  let until = null;
+  if (paid) { const d = new Date(); d.setDate(d.getDate() + days); until = d.toISOString().slice(0, 10); }
+  const col = plan === "business" ? "business_until" : "basic_until";
+  const patch = { [col]: until };
+  if (plan === "basic") { patch.is_paid = paid; patch.paid_until = until; } // keep legacy field in sync
+  const { data, error } = await supabase.from("profiles").update(patch).eq("id", userId).select().single();
   if (error) throw error;
   return data;
 }
@@ -104,15 +116,15 @@ export async function saveJourney(userId, clientId, series) {
 /* ── app settings (payment / UPI) ─────────────────────────────────── */
 export async function getSettings() {
   const { data, error } = await supabase
-    .from("app_settings").select("upi_id,payee,amount").eq("id", 1).single();
+    .from("app_settings").select("upi_id,payee,amount,business_amount").eq("id", 1).single();
   if (error) throw error;
   return data;
 }
 
 export async function saveSettings(s) {
   const { data, error } = await supabase.from("app_settings")
-    .upsert({ id: 1, upi_id: s.upi_id, payee: s.payee, amount: s.amount, updated_at: new Date().toISOString() }, { onConflict: "id" })
-    .select("upi_id,payee,amount").single();
+    .upsert({ id: 1, upi_id: s.upi_id, payee: s.payee, amount: s.amount, business_amount: s.business_amount, updated_at: new Date().toISOString() }, { onConflict: "id" })
+    .select("upi_id,payee,amount,business_amount").single();
   if (error) throw error;
   return data;
 }

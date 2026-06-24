@@ -16,7 +16,7 @@ import { inr, inrShort, pct, num, today, withCalc } from "./lib/format";
 import {
   fetchHoldings, fetchAllHoldings, addHolding, updateHolding, deleteHolding,
   fetchSnapshots, saveSnapshot,
-  fetchMyProfile, listProfiles, setProfilePaid,
+  fetchMyProfile, listProfiles, setProfilePaid, setProfilePlanPaid,
   fetchJourney, saveJourney,
   getSettings, saveSettings,
   fetchClients, addClient, updateClient, deleteClient,
@@ -36,6 +36,8 @@ import { parseTradebook } from "./lib/importTradebook";
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = loading
   const [profile, setProfile] = useState(undefined); // undefined = loading
+  const [planView, setPlanViewRaw] = useState(() => { try { return localStorage.getItem("folio-plan"); } catch { return null; } });
+  const setPlanView = (v) => { try { v ? localStorage.setItem("folio-plan", v) : localStorage.removeItem("folio-plan"); } catch {} setPlanViewRaw(v); };
 
   useEffect(() => {
     if (!configured) { setSession(null); return; }
@@ -55,20 +57,79 @@ export default function App() {
   if (profile === undefined) return <Center><div style={{ color: T.muted, fontFamily: T.sans }}>Loading…</div></Center>;
 
   const isOwner = profile?.role === "owner";
-  const paidActive = profile?.is_paid && (!profile?.paid_until || profile.paid_until >= today());
-  if (!isOwner && !paidActive) return <Paywall user={session.user} />;
+  const valid = (d) => !!d && d >= today();
+  const legacyBasic = profile?.is_paid && (!profile?.paid_until || profile.paid_until >= today());
+  const hasBusiness = isOwner || valid(profile?.business_until);
+  const hasBasic = isOwner || hasBusiness || valid(profile?.basic_until) || legacyBasic;
 
-  return <Shell user={session.user} isOwner={isOwner} />;
+  const effectiveView = planView || (isOwner ? "business" : hasBusiness ? "business" : hasBasic ? "basic" : null);
+
+  if (!isOwner && effectiveView === null) return <ChoosePackage user={session.user} onChoose={setPlanView} />;
+  if (effectiveView === "basic" && !hasBasic) return <Paywall user={session.user} plan="basic" onBack={() => setPlanView(null)} />;
+  if (effectiveView === "business" && !hasBusiness) return <Paywall user={session.user} plan="business" onBack={() => setPlanView(hasBasic ? "basic" : null)} />;
+
+  return <Shell user={session.user} isOwner={isOwner} plan={effectiveView} hasBasic={hasBasic} hasBusiness={hasBusiness} onSwitchPlan={setPlanView} />;
+}
+
+/* ── choose a plan (Basic vs Business) ────────────────────────────── */
+function ChoosePackage({ user, onChoose }) {
+  const [s, setS] = useState(null);
+  useEffect(() => { getSettings().then(setS).catch(() => setS(null)); }, []);
+  const basicAmt = s?.amount ?? 99;
+  const bizAmt = s?.business_amount ?? 6000;
+  const basicFeatures = [
+    "Your portfolio dashboard & holdings",
+    "Multi-broker Excel / CSV import",
+    "Holding detail: price trend, 52-week range, financials",
+    "Allocation charts & investment journey",
+    "Planning tools (SIP, EMI, retirement, goal…)",
+    "Light & dark theme",
+  ];
+  const bizFeatures = [
+    "Everything in Basic",
+    "Manage unlimited clients",
+    "Advisor dashboard with total AUM",
+    "Per-client CRM: notes, tasks, reminders",
+    "Birthday & anniversary reminders",
+    "Family grouping",
+  ];
+  const Card = ({ name, price, sub, features, plan, highlight }) => (
+    <div style={{ flex: 1, minWidth: 260, maxWidth: 360, background: T.surface, border: `1.5px solid ${highlight ? T.gold : T.border}`, borderRadius: 16, padding: 24, position: "relative" }}>
+      {highlight && <div style={{ position: "absolute", top: -11, left: 24, background: T.gold, color: "#fff", fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 20 }}>For fund managers</div>}
+      <div style={{ fontSize: 16, fontWeight: 800 }}>{name}</div>
+      <div style={{ fontSize: 28, fontWeight: 800, fontFamily: T.mono, color: T.gold, marginTop: 6 }}>₹{Number(price).toLocaleString("en-IN")}<span style={{ fontSize: 13, color: T.muted, fontWeight: 400 }}> /month</span></div>
+      <div style={{ color: T.faint, fontSize: 12.5, margin: "4px 0 16px" }}>{sub}</div>
+      <div style={{ display: "grid", gap: 9, marginBottom: 20 }}>
+        {features.map((f, i) => <div key={i} style={{ display: "flex", gap: 8, fontSize: 13, color: T.text, lineHeight: 1.45 }}><Check size={15} color={T.pos} style={{ flexShrink: 0, marginTop: 1 }} /> {f}</div>)}
+      </div>
+      <button onClick={() => onChoose(plan)} style={{ ...(highlight ? btnGold : btnGhost), width: "100%", justifyContent: "center" }}>Choose {name}</button>
+    </div>
+  );
+  return (
+    <div style={{ minHeight: "100vh", background: T.bg, fontFamily: T.sans, color: T.text, padding: "32px 18px" }}>
+      <div style={{ maxWidth: 820, margin: "0 auto", textAlign: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 6 }}><Logo size={28} /><span style={{ fontSize: 18, fontWeight: 700 }}>Folio</span></div>
+        <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 6 }}>Choose your plan</div>
+        <div style={{ color: T.muted, fontSize: 13.5, marginBottom: 26 }}>Pick the plan that fits you. You can switch anytime.</div>
+        <div style={{ display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap", textAlign: "left" }}>
+          <Card name="Basic" price={basicAmt} sub="For individual investors" features={basicFeatures} plan="basic" />
+          <Card name="Business" price={bizAmt} sub="For advisors & fund managers" features={bizFeatures} plan="business" highlight />
+        </div>
+        <button onClick={() => supabase.auth.signOut()} style={{ ...btnGhost, marginTop: 24 }}><LogOut size={14} /> Sign out</button>
+      </div>
+    </div>
+  );
 }
 
 /* ── paywall (shown to unpaid, non-owner users) ───────────────────── */
-function Paywall({ user }) {
+function Paywall({ user, plan = "basic", onBack }) {
   const [s, setS] = useState(null);
   useEffect(() => { getSettings().then(setS).catch(() => setS(null)); }, []);
   const upi = (s?.upi_id || PAYWALL.upi || "").trim();
-  const amount = s?.amount ?? PAYWALL.amount ?? 99;
+  const amount = plan === "business" ? (s?.business_amount ?? 6000) : (s?.amount ?? PAYWALL.amount ?? 99);
   const payee = (s?.payee || PAYWALL.payee || "Folio").trim();
-  const priceLabel = `₹${amount} / month`;
+  const planName = plan === "business" ? "Business" : "Basic";
+  const priceLabel = `₹${Number(amount).toLocaleString("en-IN")} / month`;
   const qrValue = upi ? `upi://pay?pa=${upi}&pn=${encodeURIComponent(payee)}&am=${amount}&cu=INR` : "";
   return (
     <Center>
@@ -76,9 +137,9 @@ function Paywall({ user }) {
         <div style={{ width: 46, height: 46, borderRadius: 12, background: T.gold + "22", display: "grid", placeItems: "center", margin: "0 auto 14px" }}>
           <Lock size={22} color={T.gold} />
         </div>
-        <div style={{ color: T.text, fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Unlock Folio</div>
+        <div style={{ color: T.text, fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Unlock {planName}</div>
         <div style={{ color: T.muted, fontSize: 13, lineHeight: 1.6, marginBottom: 18 }}>
-          Your account is ready, but access is locked until your subscription is active.
+          You’ve selected the {planName} plan. Access unlocks once your subscription is active.
         </div>
         <div style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
           <div style={{ fontSize: 24, fontWeight: 800, fontFamily: T.mono, color: T.gold }}>{priceLabel}</div>
@@ -100,6 +161,11 @@ function Paywall({ user }) {
           <div style={{ color: T.faint, fontSize: 11.5, marginTop: 10 }}>{PAYWALL.note}</div>
         </div>
         <div style={{ color: T.faint, fontSize: 11.5, marginBottom: 14 }}>Signed in as {user.email}</div>
+        {onBack && (
+          <button onClick={onBack} style={{ ...btnGhost, width: "100%", justifyContent: "center", marginBottom: 8 }}>
+            <ChevronLeft size={14} /> Change plan
+          </button>
+        )}
         <button onClick={() => supabase.auth.signOut()} style={{ ...btnGhost, width: "100%", justifyContent: "center" }}>
           <LogOut size={14} /> Sign out
         </button>
@@ -108,8 +174,25 @@ function Paywall({ user }) {
   );
 }
 
+function PlanToggle({ plan, hasBusiness, onSwitch, mobile }) {
+  const opt = (id, label) => (
+    <button key={id} onClick={() => onSwitch(id)} style={{ flex: 1, padding: "8px 12px", borderRadius: 8, border: "none", cursor: "pointer", fontFamily: T.sans, fontSize: 13, fontWeight: 600, background: plan === id ? T.gold : "transparent", color: plan === id ? "#fff" : T.muted, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+      {label}{id === "business" && !hasBusiness && <Lock size={12} />}
+    </button>
+  );
+  return (
+    <div style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+      <div style={{ display: "inline-flex", background: T.surface2, border: `1px solid ${T.border}`, borderRadius: 10, padding: 3, width: mobile ? "100%" : 300 }}>
+        {opt("basic", "Basic")}
+        {opt("business", "Business")}
+      </div>
+      <span style={{ fontSize: 12, color: T.muted }}>{plan === "business" ? "Advisor mode — manage clients" : "Personal mode"}</span>
+    </div>
+  );
+}
+
 /* ── authenticated shell ──────────────────────────────────────────── */
-function Shell({ user, isOwner }) {
+function Shell({ user, isOwner, plan, hasBusiness, onSwitchPlan }) {
   const [page, setPageRaw] = useState(() => {
     try { return localStorage.getItem("folio-tab") || "dashboard"; } catch { return "dashboard"; }
   });
@@ -140,17 +223,25 @@ function Shell({ user, isOwner }) {
   }, []);
   const mobile = w < 760;
 
-  // Load the advisor's client book once.
+  // Load the advisor's client book once. Basic users get one auto-created
+  // "My Portfolio" so they have a single portfolio without touching clients.
   useEffect(() => {
     (async () => {
       try {
-        const cs = await fetchClients(user.id);
+        let cs = await fetchClients(user.id);
+        if (plan === "basic" && cs.length === 0) { const c = await addClient(user.id, { name: "My Portfolio" }); cs = [c]; }
         setClients(cs);
         setClientIdRaw((cur) => (cur && cs.some((c) => c.id === cur)) ? cur : (cs[0]?.id || null));
       } catch (e) { console.error("clients", e); }
       finally { setClientsLoaded(true); }
     })();
-  }, [user.id]);
+  }, [user.id, plan]);
+
+  // If the active tab isn't allowed on this plan, fall back to dashboard.
+  useEffect(() => {
+    const allowed = ["dashboard", "holdings", "analytics", "tools", ...(plan === "business" ? ["clients"] : []), ...(isOwner ? ["admin"] : [])];
+    if (!allowed.includes(page)) setPage("dashboard");
+  }, [plan]);
 
   // Load the selected client's portfolio. Each source loads independently so
   // one failure can't wipe the others.
@@ -264,7 +355,9 @@ function Shell({ user, isOwner }) {
 
   if (!clientsLoaded) return <Center><div style={{ color: T.muted, fontFamily: T.sans }}>Loading…</div></Center>;
 
-  const tabs = [["dashboard", LayoutDashboard, "Dashboard"], ["holdings", ListOrdered, "Holdings"], ["analytics", PieIcon, "Analytics"], ["clients", Briefcase, "Clients"], ["tools", Calculator, "Tools"]];
+  const tabs = [["dashboard", LayoutDashboard, "Dashboard"], ["holdings", ListOrdered, "Holdings"], ["analytics", PieIcon, "Analytics"]];
+  if (plan === "business") tabs.push(["clients", Briefcase, "Clients"]);
+  tabs.push(["tools", Calculator, "Tools"]);
   if (isOwner) tabs.push(["admin", Users, "Admin"]);
   const portfolioPage = page === "dashboard" || page === "holdings" || page === "analytics";
 
@@ -275,7 +368,7 @@ function Shell({ user, isOwner }) {
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <Logo size={26} />
           <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: -0.3 }}>Folio</span>
-          {clients.length > 0 && (
+          {plan === "business" && clients.length > 0 && (
             <div style={{ position: "relative", display: "flex", alignItems: "center", marginLeft: 4 }}>
               <span style={{ color: T.faint, marginRight: 8 }}>·</span>
               <Briefcase size={14} color={T.muted} />
@@ -301,6 +394,10 @@ function Shell({ user, isOwner }) {
       </div>
 
       <div style={{ maxWidth: 1120, margin: "0 auto", padding: mobile ? 16 : "24px 28px" }}>
+        {page === "dashboard" && (
+          <PlanToggle plan={plan} hasBusiness={hasBusiness} onSwitch={onSwitchPlan} mobile={mobile} />
+        )}
+
         {portfolioPage && clientId && (
           <>
             {!mobile && <div style={{ fontSize: 13, color: T.muted, marginBottom: 10 }}>{activeClient?.name}</div>}
@@ -370,7 +467,7 @@ function Shell({ user, isOwner }) {
           <AnalyticsPage rows={rows} snaps={snaps} chart={chart} setChart={setChart} groupBy={groupBy} setGroupBy={setGroupBy} onSnapshot={snapshot} mobile={mobile} />
         )}
 
-        {page === "clients" && (
+        {plan === "business" && page === "clients" && (
           <ClientsPage user={user} clients={clients} clientId={clientId} setClientId={setClientId}
             onSave={saveClient} onRemove={removeClient} goPortfolio={() => setPage("dashboard")} mobile={mobile} />
         )}
@@ -1024,7 +1121,7 @@ function PaymentSettings() {
   if (!s) return null;
   const save = async () => {
     setBusy(true); setMsg("");
-    try { await saveSettings({ upi_id: (s.upi_id || "").trim(), payee: (s.payee || "Folio").trim(), amount: Number(s.amount) || 99 }); setMsg("Saved. Payers will now see this UPI."); }
+    try { await saveSettings({ upi_id: (s.upi_id || "").trim(), payee: (s.payee || "Folio").trim(), amount: Number(s.amount) || 99, business_amount: Number(s.business_amount) || 6000 }); setMsg("Saved. Payers will now see this UPI."); }
     catch (e) { setMsg(e?.message ? `Couldn't save: ${e.message}` : "Couldn't save. Make sure schema_settings.sql has been run."); }
     finally { setBusy(false); }
   };
@@ -1043,8 +1140,12 @@ function PaymentSettings() {
           <input style={field} value={s.payee || ""} placeholder="Folio" onChange={(e) => setS({ ...s, payee: e.target.value })} />
         </div>
         <div>
-          <label style={lbl}>Amount (₹/month)</label>
+          <label style={lbl}>Basic price (₹/month)</label>
           <input style={field} type="number" value={s.amount ?? 99} onChange={(e) => setS({ ...s, amount: e.target.value })} />
+        </div>
+        <div>
+          <label style={lbl}>Business price (₹/month)</label>
+          <input style={field} type="number" value={s.business_amount ?? 6000} onChange={(e) => setS({ ...s, business_amount: e.target.value })} />
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -1068,20 +1169,24 @@ function AdminPage({ mobile }) {
   };
   useEffect(() => { load(); }, []);
 
-  const toggle = async (u, paid) => {
-    setBusy(u.id);
-    try { await setProfilePaid(u.id, paid, 30); await load(); }
+  const setPlan = async (u, plan, paid) => {
+    setBusy(u.id + plan);
+    try { await setProfilePlanPaid(u.id, plan, paid, 30); await load(); }
     catch (e) { setErr(String(e.message || e)); }
     finally { setBusy(""); }
   };
+  const planActive = (until) => until && until >= today();
 
-  const status = (u) => {
-    if (u.role === "owner") return { label: "Owner", color: T.gold };
-    const active = u.is_paid && (!u.paid_until || u.paid_until >= today());
-    return active
-      ? { label: u.paid_until ? `Active till ${u.paid_until}` : "Active", color: T.pos }
-      : { label: "Inactive", color: T.neg };
-  };
+  const cell = (u, plan, active, until) => (
+    <td style={{ padding: "10px 14px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
+        <span style={{ color: active ? T.pos : T.faint, fontSize: 12, fontWeight: 600 }}>{active ? (until ? `till ${until}` : "active") : "—"}</span>
+        {active
+          ? <button onClick={() => setPlan(u, plan, false)} disabled={busy === u.id + plan} style={{ ...btnGhost, padding: "5px 9px" }}>Off</button>
+          : <button onClick={() => setPlan(u, plan, true)} disabled={busy === u.id + plan} style={{ ...btnGold, padding: "5px 9px" }}><Check size={12} /> 30d</button>}
+      </div>
+    </td>
+  );
 
   return (
     <>
@@ -1095,28 +1200,29 @@ function AdminPage({ mobile }) {
       {err && <div style={{ color: T.neg, fontSize: 12.5, marginBottom: 10 }}>{err}</div>}
       <Panel pad={0}>
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 520 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 560 }}>
             <thead>
               <tr style={{ color: T.muted }}>
-                {["Email", "Status", ""].map((h, i) => (
-                  <th key={i} style={{ padding: "11px 14px", textAlign: i === 2 ? "right" : "left", fontWeight: 600, borderBottom: `1px solid ${T.border}`, whiteSpace: "nowrap" }}>{h}</th>
-                ))}
+                <th style={{ padding: "11px 14px", textAlign: "left", fontWeight: 600, borderBottom: `1px solid ${T.border}` }}>Email</th>
+                <th style={{ padding: "11px 14px", textAlign: "right", fontWeight: 600, borderBottom: `1px solid ${T.border}` }}>Basic ₹99</th>
+                <th style={{ padding: "11px 14px", textAlign: "right", fontWeight: 600, borderBottom: `1px solid ${T.border}` }}>Business ₹6000</th>
               </tr>
             </thead>
             <tbody>
               {(users || []).map((u) => {
-                const s = status(u);
+                if (u.role === "owner") return (
+                  <tr key={u.id} style={{ borderBottom: `1px solid ${T.border}` }}>
+                    <td style={{ padding: "10px 14px" }}>{u.email}</td>
+                    <td colSpan={2} style={{ padding: "10px 14px", textAlign: "right", color: T.gold, fontWeight: 600 }}>Owner — full access</td>
+                  </tr>
+                );
+                const b = planActive(u.basic_until) || (u.is_paid && (!u.paid_until || u.paid_until >= today()));
+                const z = planActive(u.business_until);
                 return (
                   <tr key={u.id} style={{ borderBottom: `1px solid ${T.border}` }}>
-                    <td style={{ padding: "11px 14px" }}>{u.email}</td>
-                    <td style={{ padding: "11px 14px" }}><span style={{ color: s.color, fontWeight: 600 }}>{s.label}</span></td>
-                    <td style={{ ...tdR }}>
-                      {u.role !== "owner" && (
-                        s.label === "Inactive"
-                          ? <button onClick={() => toggle(u, true)} disabled={busy === u.id} style={btnGold}><Check size={13} /> Activate 30d</button>
-                          : <button onClick={() => toggle(u, false)} disabled={busy === u.id} style={btnGhost}>Deactivate</button>
-                      )}
-                    </td>
+                    <td style={{ padding: "10px 14px" }}>{u.email}</td>
+                    {cell(u, "basic", b, u.basic_until || u.paid_until)}
+                    {cell(u, "business", z, u.business_until)}
                   </tr>
                 );
               })}
@@ -1127,7 +1233,7 @@ function AdminPage({ mobile }) {
         </div>
       </Panel>
       <div style={{ color: T.faint, fontSize: 11.5, marginTop: 14, lineHeight: 1.6 }}>
-        When a friend pays you ₹99 (via UPI), tap <b style={{ color: T.muted }}>Activate 30d</b>. Their app unlocks instantly and stays active for 30 days.
+        When someone pays, tap <b style={{ color: T.muted }}>30d</b> under the plan they bought (Basic ₹99 or Business ₹6000). Their app unlocks instantly for 30 days. Tap <b style={{ color: T.muted }}>Off</b> to revoke.
       </div>
     </>
   );
