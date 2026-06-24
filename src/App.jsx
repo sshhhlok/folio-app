@@ -271,7 +271,7 @@ function Shell({ user, isOwner, plan, hasBusiness, onSwitchPlan }) {
   const onSave = async (h) => {
     try {
       if (form && form.id) { const u = await updateHolding(form.id, h); setHoldings((hs) => hs.map((x) => x.id === u.id ? u : x)); }
-      else { const a = await addHolding(user.id, clientId, h); setHoldings((hs) => [...hs, a]); }
+      else { const cid = clientId || await ensureClient(); if (!cid) return; const a = await addHolding(user.id, cid, h); setHoldings((hs) => [...hs, a]); }
     } catch (e) { console.error(e); }
     setForm(null);
   };
@@ -288,12 +288,18 @@ function Shell({ user, isOwner, plan, hasBusiness, onSwitchPlan }) {
   const removeClient = async (id) => {
     try { await deleteClient(id); setClients((cs) => cs.filter((x) => x.id !== id)); if (clientId === id) setClientId(null); } catch (e) { console.error(e); }
   };
+  // Guarantees a client exists to attach holdings to (used by Basic plan).
+  const ensureClient = async () => {
+    if (clientId) return clientId;
+    try { const c = await addClient(user.id, { name: "My Portfolio" }); setClients((cs) => [...cs, c].sort((a, b) => a.name.localeCompare(b.name))); setClientId(c.id); return c.id; }
+    catch (e) { console.error(e); return null; }
+  };
   const removeBySymbol = async (sym) => { const h = holdings.find((x) => x.symbol?.toUpperCase() === String(sym).toUpperCase()); if (h) await remove(h.id); };
-  const addQuick = async (h) => { try { const a = await addHolding(user.id, clientId, { sector: "", tier: "Medium", ...h }); setHoldings((hs) => [...hs, a]); } catch (e) { console.error(e); } };
+  const addQuick = async (h) => { try { const cid = clientId || await ensureClient(); if (!cid) return; const a = await addHolding(user.id, cid, { sector: "", tier: "Medium", ...h }); setHoldings((hs) => [...hs, a]); } catch (e) { console.error(e); } };
 
   const snapshot = async () => {
     const d = today(); const v = Math.round(totals.value);
-    try { const s = await saveSnapshot(user.id, clientId, d, v); setSnaps((p) => [...p.filter((x) => x.date !== d), s].sort((a, b) => a.date.localeCompare(b.date))); } catch (e) { console.error(e); }
+    try { const cid = clientId || await ensureClient(); if (!cid) return; const s = await saveSnapshot(user.id, cid, d, v); setSnaps((p) => [...p.filter((x) => x.date !== d), s].sort((a, b) => a.date.localeCompare(b.date))); } catch (e) { console.error(e); }
   };
 
   const refreshPrices = async () => {
@@ -317,10 +323,12 @@ function Shell({ user, isOwner, plan, hasBusiness, onSwitchPlan }) {
     setImporting(true); setImportMsg("");
     try {
       const parsed = await parseHoldingsFile(file);
+      const cid = clientId || await ensureClient();
+      if (!cid) { setImportMsg("Couldn't prepare your portfolio. Run schema_advisor.sql in Supabase."); return; }
       const have = new Set(holdings.map((h) => h.symbol.toUpperCase()));
       const fresh = parsed.filter((p) => !have.has(p.symbol.toUpperCase()));
       const added = [];
-      for (const p of fresh) { const a = await addHolding(user.id, clientId, p); added.push(a); }
+      for (const p of fresh) { const a = await addHolding(user.id, cid, p); added.push(a); }
       setHoldings((hs) => [...hs, ...added]);
       const skipped = parsed.length - added.length;
       setImportMsg(`Imported ${added.length} holding${added.length === 1 ? "" : "s"}${skipped ? `, skipped ${skipped} already in your list` : ""}.`);
@@ -333,7 +341,8 @@ function Shell({ user, isOwner, plan, hasBusiness, onSwitchPlan }) {
     setImporting(true); setImportMsg("");
     try {
       const series = await parseTradebook(file);
-      const saved = await saveJourney(user.id, clientId, series);
+      const cid = clientId || await ensureClient(); if (!cid) return;
+      const saved = await saveJourney(user.id, cid, series);
       setJourney(saved);
       setImportMsg(`Investment journey built from ${series.length} dates.`);
     } catch (e) {
@@ -386,6 +395,13 @@ function Shell({ user, isOwner, plan, hasBusiness, onSwitchPlan }) {
               <Icon size={15} /> {label}
             </button>
           ))}
+          <button onClick={() => onSwitchPlan(plan === "business" ? "basic" : "business")} title="Switch plan"
+            style={{ display: "flex", alignItems: "center", gap: 7, background: "transparent", border: "none", cursor: "pointer", padding: "4px 6px", fontFamily: T.sans }}>
+            <span style={{ fontSize: 12.5, fontWeight: 600, color: plan === "business" ? T.gold : T.muted }}>{plan === "business" ? "Business" : "Basic"}</span>
+            <span style={{ width: 38, height: 22, borderRadius: 11, background: plan === "business" ? T.gold : T.border, position: "relative", flexShrink: 0, transition: "background .15s" }}>
+              <span style={{ position: "absolute", top: 2, left: plan === "business" ? 18 : 2, width: 18, height: 18, borderRadius: "50%", background: "#fff", transition: "left .15s", boxShadow: "0 1px 2px rgba(0,0,0,0.3)" }} />
+            </span>
+          </button>
           <button onClick={toggleTheme} style={iconBtn} aria-label="Toggle light or dark theme" title="Toggle theme">
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
           </button>
@@ -394,10 +410,6 @@ function Shell({ user, isOwner, plan, hasBusiness, onSwitchPlan }) {
       </div>
 
       <div style={{ maxWidth: 1120, margin: "0 auto", padding: mobile ? 16 : "24px 28px" }}>
-        {page === "dashboard" && (
-          <PlanToggle plan={plan} hasBusiness={hasBusiness} onSwitch={onSwitchPlan} mobile={mobile} />
-        )}
-
         {portfolioPage && clientId && (
           <>
             {!mobile && <div style={{ fontSize: 13, color: T.muted, marginBottom: 10 }}>{activeClient?.name}</div>}
@@ -415,11 +427,23 @@ function Shell({ user, isOwner, plan, hasBusiness, onSwitchPlan }) {
             <div style={{ width: 52, height: 52, borderRadius: 14, background: T.gold + "22", display: "grid", placeItems: "center", margin: "0 auto 16px" }}>
               <Briefcase size={26} color={T.gold} />
             </div>
-            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>No client selected</div>
-            <div style={{ color: T.muted, fontSize: 13.5, lineHeight: 1.6, maxWidth: 360, margin: "0 auto 20px" }}>
-              Add your first client to start tracking a portfolio. Each client gets their own holdings, charts and journey.
-            </div>
-            <button onClick={() => setPage("clients")} style={{ ...btnGold, margin: "0 auto" }}><UserPlus size={15} /> Go to Clients</button>
+            {plan === "business" ? (
+              <>
+                <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>No client selected</div>
+                <div style={{ color: T.muted, fontSize: 13.5, lineHeight: 1.6, maxWidth: 360, margin: "0 auto 20px" }}>
+                  Add your first client to start tracking a portfolio. Each client gets their own holdings, charts and journey.
+                </div>
+                <button onClick={() => setPage("clients")} style={{ ...btnGold, margin: "0 auto" }}><UserPlus size={15} /> Go to Clients</button>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Set up your portfolio</div>
+                <div style={{ color: T.muted, fontSize: 13.5, lineHeight: 1.6, maxWidth: 360, margin: "0 auto 20px" }}>
+                  Tap below to create your portfolio, then add holdings or import a broker file.
+                </div>
+                <button onClick={ensureClient} style={{ ...btnGold, margin: "0 auto" }}><Plus size={15} /> Create my portfolio</button>
+              </>
+            )}
           </Panel>
         )}
 

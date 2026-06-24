@@ -62,7 +62,7 @@ export async function fetchMyProfile(userId) {
 export async function listProfiles() {
   const { data, error } = await supabase
     .from("profiles")
-    .select("id,email,role,is_paid,paid_until,basic_until,business_until,created_at")
+    .select("*")
     .order("created_at", { ascending: true });
   if (error) throw error;
   return data || [];
