@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import {
   ResponsiveContainer, PieChart, Pie, Cell, Tooltip as RTooltip,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, LineChart, Line, Legend, ReferenceLine,
+  AreaChart, Area, ComposedChart,
 } from "recharts";
 import {
   LayoutDashboard, ListOrdered, Plus, Pencil, Trash2, Save,
@@ -1109,49 +1110,154 @@ function ClientsPage({ user, clients, clientId, setClientId, onSave, onRemove, g
   );
 }
 
-function CalcCard({ fields, compute, note }) {
-  const [v, setV] = useState(() => Object.fromEntries(fields.map((f) => [f.k, f.def])));
-  const set = (k, val) => setV((p) => ({ ...p, [k]: val }));
-  let result;
-  try { result = compute(Object.fromEntries(Object.entries(v).map(([k, x]) => [k, parseFloat(x) || 0]))); } catch { result = null; }
+const TOOLS = [
+  { key: "sip", title: "SIP future value", blurb: "What a monthly SIP grows to", icon: TrendingUp,
+    fields: [{ k: "monthly", label: "Monthly (₹)", def: 10000 }, { k: "years", label: "Years", def: 10 }, { k: "rate", label: "Return % p.a.", def: 12 }],
+    run: (v) => {
+      const i = v.rate / 1200, n = v.years * 12, fvf = (m) => i ? ((Math.pow(1 + i, m) - 1) / i) * (1 + i) : m;
+      const invested = v.monthly * n, value = v.monthly * fvf(n), gains = value - invested;
+      const growth = []; for (let y = 1; y <= v.years; y++) growth.push({ label: `Y${y}`, invested: Math.round(v.monthly * 12 * y), value: Math.round(v.monthly * fvf(12 * y)) });
+      return { primary: { label: "Maturity value", value }, stats: [{ label: "Invested", value: invested }, { label: "Est. gains", value: gains, pos: true }, { label: "Return", value: invested ? gains / invested * 100 : 0, pct: true }], growth, split: [{ name: "Invested", value: invested, color: CHART.axis }, { name: "Gains", value: Math.max(0, gains), color: CHART.gold }] };
+    } },
+  { key: "goal", title: "Goal — required SIP", blurb: "Monthly SIP to hit a target", icon: Check,
+    fields: [{ k: "target", label: "Target (₹)", def: 5000000 }, { k: "years", label: "Years", def: 15 }, { k: "rate", label: "Return % p.a.", def: 12 }],
+    run: (v) => {
+      const i = v.rate / 1200, n = v.years * 12, fvf = (m) => i ? ((Math.pow(1 + i, m) - 1) / i) * (1 + i) : m;
+      const monthly = fvf(n) ? v.target / fvf(n) : 0, invested = monthly * n, gains = v.target - invested;
+      const growth = []; for (let y = 1; y <= v.years; y++) growth.push({ label: `Y${y}`, invested: Math.round(monthly * 12 * y), value: Math.round(monthly * fvf(12 * y)) });
+      return { primary: { label: "Monthly SIP needed", value: monthly }, stats: [{ label: "You invest", value: invested }, { label: "Est. gains", value: Math.max(0, gains), pos: true }, { label: "Target", value: v.target }], growth, split: [{ name: "You invest", value: invested, color: CHART.axis }, { name: "Gains", value: Math.max(0, gains), color: CHART.gold }] };
+    } },
+  { key: "lumpsum", title: "Lumpsum growth", blurb: "A one-time amount over time", icon: IndianRupee,
+    fields: [{ k: "amount", label: "Amount (₹)", def: 100000 }, { k: "years", label: "Years", def: 10 }, { k: "rate", label: "Return % p.a.", def: 12 }],
+    run: (v) => {
+      const r = v.rate / 100, value = v.amount * Math.pow(1 + r, v.years), gains = value - v.amount;
+      const growth = []; for (let y = 0; y <= v.years; y++) growth.push({ label: `Y${y}`, invested: v.amount, value: Math.round(v.amount * Math.pow(1 + r, y)) });
+      return { primary: { label: "Future value", value }, stats: [{ label: "Invested", value: v.amount }, { label: "Est. gains", value: gains, pos: true }, { label: "Return", value: v.amount ? gains / v.amount * 100 : 0, pct: true }], growth, split: [{ name: "Invested", value: v.amount, color: CHART.axis }, { name: "Gains", value: Math.max(0, gains), color: CHART.gold }] };
+    } },
+  { key: "emi", title: "Loan EMI", blurb: "Instalment & interest on a loan", icon: BarChart3,
+    fields: [{ k: "loan", label: "Loan (₹)", def: 2500000 }, { k: "years", label: "Years", def: 20 }, { k: "rate", label: "Interest %", def: 8.5 }],
+    run: (v) => {
+      const i = v.rate / 1200, n = v.years * 12, emi = i ? v.loan * i * Math.pow(1 + i, n) / (Math.pow(1 + i, n) - 1) : v.loan / n;
+      const total = emi * n, interest = total - v.loan;
+      const growth = []; let bal = v.loan; growth.push({ label: "Y0", value: Math.round(bal) });
+      for (let y = 1; y <= v.years; y++) { for (let m = 0; m < 12; m++) bal = bal * (1 + i) - emi; growth.push({ label: `Y${y}`, value: Math.max(0, Math.round(bal)) }); }
+      return { primary: { label: "Monthly EMI", value: emi }, stats: [{ label: "Total payable", value: total }, { label: "Interest", value: interest, neg: true }, { label: "Principal", value: v.loan }], growth, growthLabel: "Loan balance over time", split: [{ name: "Principal", value: v.loan, color: CHART.axis }, { name: "Interest", value: Math.max(0, interest), color: CHART.neg }] };
+    } },
+  { key: "inflation", title: "Inflation impact", blurb: "What today's cost becomes", icon: LineIcon,
+    fields: [{ k: "amount", label: "Today (₹)", def: 100000 }, { k: "years", label: "Years", def: 10 }, { k: "rate", label: "Inflation %", def: 6 }],
+    run: (v) => {
+      const r = v.rate / 100, future = v.amount * Math.pow(1 + r, v.years), extra = future - v.amount;
+      const growth = []; for (let y = 0; y <= v.years; y++) growth.push({ label: `Y${y}`, value: Math.round(v.amount * Math.pow(1 + r, y)) });
+      return { primary: { label: "Future cost", value: future }, stats: [{ label: "Today's cost", value: v.amount }, { label: "Extra needed", value: extra, neg: true }, { label: "Rise", value: v.amount ? extra / v.amount * 100 : 0, pct: true }], growth, growthLabel: "Cost over time", split: [{ name: "Today's cost", value: v.amount, color: CHART.axis }, { name: "Inflation rise", value: Math.max(0, extra), color: CHART.neg }] };
+    } },
+  { key: "retire", title: "Retirement corpus", blurb: "Corpus you'll need to retire", icon: CalendarClock,
+    fields: [{ k: "expense", label: "Monthly exp (₹)", def: 50000 }, { k: "years", label: "Years to retire", def: 25 }, { k: "infl", label: "Inflation %", def: 6 }],
+    run: (v) => {
+      const r = v.infl / 100, monthlyAt = v.expense * Math.pow(1 + r, v.years), annualAt = monthlyAt * 12, corpus = annualAt * 25;
+      const growth = []; for (let y = 0; y <= v.years; y++) growth.push({ label: `Y${y}`, value: Math.round(v.expense * Math.pow(1 + r, y)) });
+      return { primary: { label: "Corpus needed", value: corpus }, stats: [{ label: "Monthly exp. then", value: monthlyAt }, { label: "Yearly then", value: annualAt }, { label: "25× rule", value: corpus }], growth, growthLabel: "Your monthly expense over time", split: null };
+    } },
+];
+
+function ToolViz({ R, mobile }) {
+  if (!R) return <Empty text="Enter values above." />;
+  const f = (s) => s.pct ? pct(s.value) : inr(Math.round(s.value));
+  const hasInv = R.growth && R.growth.some((g) => g.invested != null);
+  const tot = R.split ? (R.split.reduce((a, b) => a + b.value, 0) || 1) : 1;
   return (
     <div>
-      <div style={{ display: "grid", gap: 10 }}>
-        {fields.map((f) => (
-          <div key={f.k} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <label style={{ flex: 1, fontSize: 13, color: T.muted }}>{f.label}</label>
-            <input type="number" value={v[f.k]} onChange={(e) => set(f.k, e.target.value)} style={{ ...cField, width: 130, fontFamily: T.mono, fontSize: 13.5 }} />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 14, gap: 8 }}>
+        <span style={{ fontSize: 13, color: T.muted }}>{R.primary.label}</span>
+        <span style={{ fontSize: 26, fontWeight: 800, color: T.gold, fontFamily: T.mono }}>{inr(Math.round(R.primary.value))}</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 16 }}>
+        {R.stats.map((s, i) => (
+          <div key={i} style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 10, padding: "9px 10px" }}>
+            <div style={{ fontSize: 10.5, color: T.faint, marginBottom: 2 }}>{s.label}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, fontFamily: T.mono, color: s.pos ? T.pos : s.neg ? T.neg : T.text }}>{f(s)}</div>
           </div>
         ))}
       </div>
-      <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-        <span style={{ fontSize: 13, color: T.muted }}>{note}</span>
-        <span style={{ fontSize: 22, fontWeight: 800, color: T.gold, fontFamily: T.mono }}>{result == null || !isFinite(result) ? "—" : inr(Math.round(result))}</span>
-      </div>
+      {R.growth && R.growth.length > 1 && (
+        <div style={{ marginBottom: R.split ? 16 : 0 }}>
+          {R.growthLabel && <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 6 }}>{R.growthLabel}</div>}
+          <div style={{ height: 170 }}>
+            <ResponsiveContainer>
+              <ComposedChart data={R.growth} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                <defs><linearGradient id="tg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={CHART.gold} stopOpacity={0.35} /><stop offset="100%" stopColor={CHART.gold} stopOpacity={0} /></linearGradient></defs>
+                <CartesianGrid stroke={CHART.grid} vertical={false} />
+                <XAxis dataKey="label" tick={{ fill: CHART.axis, fontSize: 10 }} axisLine={{ stroke: CHART.grid }} tickLine={false} minTickGap={14} />
+                <YAxis tick={{ fill: CHART.axis, fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={inrShort} width={48} />
+                <RTooltip {...tip} formatter={(v) => inr(v)} />
+                <Area type="monotone" dataKey="value" stroke={CHART.gold} strokeWidth={2} fill="url(#tg)" name="Value" />
+                {hasInv && <Line type="monotone" dataKey="invested" stroke={CHART.axis} strokeWidth={1.5} dot={false} strokeDasharray="4 3" name="Invested" />}
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+          {hasInv && (
+            <div style={{ display: "flex", gap: 14, fontSize: 11, color: T.muted, marginTop: 4 }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 12, height: 3, background: CHART.gold }} /> Value</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 12, height: 0, borderTop: `2px dashed ${CHART.axis}` }} /> Invested</span>
+            </div>
+          )}
+        </div>
+      )}
+      {R.split && (
+        <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+          <div style={{ width: 116, height: 116 }}>
+            <ResponsiveContainer>
+              <PieChart>
+                <Pie data={R.split} dataKey="value" nameKey="name" innerRadius={32} outerRadius={54} paddingAngle={2} stroke="none">
+                  {R.split.map((s, i) => <Cell key={i} fill={s.color} />)}
+                </Pie>
+                <RTooltip {...tip} formatter={(v) => inr(v)} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{ display: "grid", gap: 8 }}>
+            {R.split.map((s, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
+                <span style={{ width: 10, height: 10, borderRadius: 2, background: s.color }} />
+                <span style={{ color: T.muted }}>{s.name}</span>
+                <span style={{ fontFamily: T.mono, color: T.text }}>{inr(Math.round(s.value))}</span>
+                <span style={{ color: T.faint }}>({Math.round(s.value / tot * 100)}%)</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-const TOOLS = [
-  { key: "sip", title: "SIP future value", blurb: "What a monthly SIP grows to", icon: TrendingUp, note: "Maturity value",
-    fields: [{ k: "monthly", label: "Monthly invest (₹)", def: 10000 }, { k: "years", label: "Years", def: 10 }, { k: "rate", label: "Return % p.a.", def: 12 }],
-    compute: (v) => { const i = v.rate / 1200, n = v.years * 12; return i ? v.monthly * ((Math.pow(1 + i, n) - 1) / i) * (1 + i) : v.monthly * n; } },
-  { key: "goal", title: "Goal — required SIP", blurb: "Monthly SIP to reach a target", icon: Check, note: "Monthly SIP needed",
-    fields: [{ k: "target", label: "Target (₹)", def: 5000000 }, { k: "years", label: "Years", def: 15 }, { k: "rate", label: "Return % p.a.", def: 12 }],
-    compute: (v) => { const i = v.rate / 1200, n = v.years * 12; const f = i ? ((Math.pow(1 + i, n) - 1) / i) * (1 + i) : n; return f ? v.target / f : 0; } },
-  { key: "lumpsum", title: "Lumpsum growth", blurb: "Future value of a one-time amount", icon: IndianRupee, note: "Future value",
-    fields: [{ k: "amount", label: "Amount (₹)", def: 100000 }, { k: "years", label: "Years", def: 10 }, { k: "rate", label: "Return % p.a.", def: 12 }],
-    compute: (v) => v.amount * Math.pow(1 + v.rate / 100, v.years) },
-  { key: "emi", title: "Loan EMI", blurb: "Monthly instalment on a loan", icon: BarChart3, note: "Monthly EMI",
-    fields: [{ k: "loan", label: "Loan (₹)", def: 2500000 }, { k: "years", label: "Years", def: 20 }, { k: "rate", label: "Interest % p.a.", def: 8.5 }],
-    compute: (v) => { const i = v.rate / 1200, n = v.years * 12; return i ? v.loan * i * Math.pow(1 + i, n) / (Math.pow(1 + i, n) - 1) : v.loan / n; } },
-  { key: "inflation", title: "Inflation impact", blurb: "Future cost of today's money", icon: LineIcon, note: "Future cost",
-    fields: [{ k: "amount", label: "Today's cost (₹)", def: 100000 }, { k: "years", label: "Years", def: 10 }, { k: "rate", label: "Inflation % p.a.", def: 6 }],
-    compute: (v) => v.amount * Math.pow(1 + v.rate / 100, v.years) },
-  { key: "retire", title: "Retirement corpus", blurb: "Corpus you'll need to retire", icon: CalendarClock, note: "Corpus needed (25×)",
-    fields: [{ k: "expense", label: "Monthly expense now (₹)", def: 50000 }, { k: "years", label: "Years to retire", def: 25 }, { k: "infl", label: "Inflation % p.a.", def: 6 }],
-    compute: (v) => v.expense * 12 * Math.pow(1 + v.infl / 100, v.years) * 25 },
-];
+function ToolModal({ tool, onClose, mobile }) {
+  const [v, setV] = useState(() => Object.fromEntries(tool.fields.map((f) => [f.k, f.def])));
+  const set = (k, val) => setV((p) => ({ ...p, [k]: val }));
+  const nums = Object.fromEntries(Object.entries(v).map(([k, x]) => [k, parseFloat(x) || 0]));
+  let R = null; try { R = tool.run(nums); } catch { R = null; }
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: mobile ? "flex-end" : "center", justifyContent: "center", zIndex: 60, padding: mobile ? 0 : 18 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: 440, maxWidth: "100%", maxHeight: "92vh", overflowY: "auto", background: T.surface, border: `1px solid ${T.border}`, borderRadius: mobile ? "16px 16px 0 0" : 16, padding: 22, fontFamily: T.sans }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 34, height: 34, borderRadius: 9, background: T.gold + "1F", display: "grid", placeItems: "center" }}><tool.icon size={17} color={T.gold} /></div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>{tool.title}</div>
+          </div>
+          <button onClick={onClose} style={iconBtn}><X size={18} /></button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 18 }}>
+          {tool.fields.map((fld) => (
+            <div key={fld.k}>
+              <label style={{ fontSize: 10.5, color: T.muted, display: "block", marginBottom: 4 }}>{fld.label}</label>
+              <input type="number" value={v[fld.k]} onChange={(e) => set(fld.k, e.target.value)} style={{ ...cField, width: "100%", fontFamily: T.mono, fontSize: 13 }} />
+            </div>
+          ))}
+        </div>
+        <ToolViz R={R} mobile={mobile} />
+      </div>
+    </div>
+  );
+}
 
 function ToolsPage({ mobile }) {
   const [open, setOpen] = useState(null);
@@ -1172,20 +1278,7 @@ function ToolsPage({ mobile }) {
           </button>
         ))}
       </div>
-      {tool && (
-        <div onClick={() => setOpen(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: mobile ? "flex-end" : "center", justifyContent: "center", zIndex: 60, padding: mobile ? 0 : 18 }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ width: 420, maxWidth: "100%", background: T.surface, border: `1px solid ${T.border}`, borderRadius: mobile ? "16px 16px 0 0" : 16, padding: 22, fontFamily: T.sans }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ width: 34, height: 34, borderRadius: 9, background: T.gold + "1F", display: "grid", placeItems: "center" }}><tool.icon size={17} color={T.gold} /></div>
-                <div style={{ fontSize: 16, fontWeight: 700 }}>{tool.title}</div>
-              </div>
-              <button onClick={() => setOpen(null)} style={iconBtn}><X size={18} /></button>
-            </div>
-            <CalcCard fields={tool.fields} compute={tool.compute} note={tool.note} />
-          </div>
-        </div>
-      )}
+      {tool && <ToolModal tool={tool} onClose={() => setOpen(null)} mobile={mobile} />}
     </>
   );
 }
