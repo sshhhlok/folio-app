@@ -636,6 +636,7 @@ function AllocPie({ rows, groupBy, mobile }) {
 function HoldingsPage({ rows, filter, setFilter, mobile, onAdd, onEdit, onDelete, onDeleteMany, onView, onRefresh, refreshing, onImport, importing, importMsg }) {
   const fileRef = useRef(null);
   const [sel, setSel] = useState(() => new Set());
+  const [confirming, setConfirming] = useState(false);
   const filtered = useMemo(() => {
     if (!filter) return rows;
     if (filter.kind === "losers") return rows.filter((r) => r.pnl < 0);
@@ -650,9 +651,8 @@ function HoldingsPage({ rows, filter, setFilter, mobile, onAdd, onEdit, onDelete
   const toggleAll = () => setSel(() => allSel ? new Set() : new Set(filtered.map((r) => r.id)));
   const deleteSelected = async () => {
     const ids = [...sel];
-    if (!ids.length) return;
-    if (typeof window !== "undefined" && !window.confirm(`Delete ${ids.length} holding${ids.length === 1 ? "" : "s"}?`)) return;
-    await onDeleteMany(ids); setSel(new Set());
+    if (!ids.length) { setConfirming(false); return; }
+    await onDeleteMany(ids); setSel(new Set()); setConfirming(false);
   };
   const cbStyle = { width: 16, height: 16, accentColor: "#C8902F", cursor: "pointer" };
 
@@ -665,7 +665,7 @@ function HoldingsPage({ rows, filter, setFilter, mobile, onAdd, onEdit, onDelete
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {sel.size > 0 && (
-            <button onClick={deleteSelected} style={{ ...btnGhost, color: T.neg, borderColor: T.neg + "55" }}>
+            <button onClick={() => setConfirming(true)} style={{ ...btnGhost, color: T.neg, borderColor: T.neg + "55" }}>
               <Trash2 size={14} /> Delete selected ({sel.size})
             </button>
           )}
@@ -724,6 +724,21 @@ function HoldingsPage({ rows, filter, setFilter, mobile, onAdd, onEdit, onDelete
           </table>
         </div>
       </Panel>
+      {confirming && (
+        <div onClick={() => setConfirming(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60, padding: 18 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: 340, maxWidth: "100%", background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: 22, fontFamily: T.sans, textAlign: "center" }}>
+            <div style={{ width: 46, height: 46, borderRadius: 12, background: T.neg + "22", display: "grid", placeItems: "center", margin: "0 auto 14px" }}>
+              <Trash2 size={22} color={T.neg} />
+            </div>
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>Delete {sel.size} holding{sel.size === 1 ? "" : "s"}?</div>
+            <div style={{ color: T.muted, fontSize: 13, marginBottom: 18 }}>This can’t be undone.</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setConfirming(false)} style={{ ...btnGhost, flex: 1, justifyContent: "center" }}>Cancel</button>
+              <button onClick={deleteSelected} style={{ ...btnGold, flex: 1, justifyContent: "center", background: T.neg, color: "#fff" }}><Trash2 size={14} /> Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
@@ -1094,55 +1109,83 @@ function ClientsPage({ user, clients, clientId, setClientId, onSave, onRemove, g
   );
 }
 
-function CalcCard({ title, fields, compute, note }) {
+function CalcCard({ fields, compute, note }) {
   const [v, setV] = useState(() => Object.fromEntries(fields.map((f) => [f.k, f.def])));
   const set = (k, val) => setV((p) => ({ ...p, [k]: val }));
   let result;
   try { result = compute(Object.fromEntries(Object.entries(v).map(([k, x]) => [k, parseFloat(x) || 0]))); } catch { result = null; }
   return (
-    <Panel>
-      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>{title}</div>
-      <div style={{ display: "grid", gap: 8 }}>
+    <div>
+      <div style={{ display: "grid", gap: 10 }}>
         {fields.map((f) => (
           <div key={f.k} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <label style={{ flex: 1, fontSize: 12.5, color: T.muted }}>{f.label}</label>
-            <input type="number" value={v[f.k]} onChange={(e) => set(f.k, e.target.value)} style={{ ...cField, width: 120, fontFamily: T.mono, fontSize: 13 }} />
+            <label style={{ flex: 1, fontSize: 13, color: T.muted }}>{f.label}</label>
+            <input type="number" value={v[f.k]} onChange={(e) => set(f.k, e.target.value)} style={{ ...cField, width: 130, fontFamily: T.mono, fontSize: 13.5 }} />
           </div>
         ))}
       </div>
-      <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-        <span style={{ fontSize: 12.5, color: T.muted }}>{note}</span>
-        <span style={{ fontSize: 18, fontWeight: 800, color: T.gold, fontFamily: T.mono }}>{result == null || !isFinite(result) ? "—" : inr(Math.round(result))}</span>
+      <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+        <span style={{ fontSize: 13, color: T.muted }}>{note}</span>
+        <span style={{ fontSize: 22, fontWeight: 800, color: T.gold, fontFamily: T.mono }}>{result == null || !isFinite(result) ? "—" : inr(Math.round(result))}</span>
       </div>
-    </Panel>
+    </div>
   );
 }
 
+const TOOLS = [
+  { key: "sip", title: "SIP future value", blurb: "What a monthly SIP grows to", icon: TrendingUp, note: "Maturity value",
+    fields: [{ k: "monthly", label: "Monthly invest (₹)", def: 10000 }, { k: "years", label: "Years", def: 10 }, { k: "rate", label: "Return % p.a.", def: 12 }],
+    compute: (v) => { const i = v.rate / 1200, n = v.years * 12; return i ? v.monthly * ((Math.pow(1 + i, n) - 1) / i) * (1 + i) : v.monthly * n; } },
+  { key: "goal", title: "Goal — required SIP", blurb: "Monthly SIP to reach a target", icon: Check, note: "Monthly SIP needed",
+    fields: [{ k: "target", label: "Target (₹)", def: 5000000 }, { k: "years", label: "Years", def: 15 }, { k: "rate", label: "Return % p.a.", def: 12 }],
+    compute: (v) => { const i = v.rate / 1200, n = v.years * 12; const f = i ? ((Math.pow(1 + i, n) - 1) / i) * (1 + i) : n; return f ? v.target / f : 0; } },
+  { key: "lumpsum", title: "Lumpsum growth", blurb: "Future value of a one-time amount", icon: IndianRupee, note: "Future value",
+    fields: [{ k: "amount", label: "Amount (₹)", def: 100000 }, { k: "years", label: "Years", def: 10 }, { k: "rate", label: "Return % p.a.", def: 12 }],
+    compute: (v) => v.amount * Math.pow(1 + v.rate / 100, v.years) },
+  { key: "emi", title: "Loan EMI", blurb: "Monthly instalment on a loan", icon: BarChart3, note: "Monthly EMI",
+    fields: [{ k: "loan", label: "Loan (₹)", def: 2500000 }, { k: "years", label: "Years", def: 20 }, { k: "rate", label: "Interest % p.a.", def: 8.5 }],
+    compute: (v) => { const i = v.rate / 1200, n = v.years * 12; return i ? v.loan * i * Math.pow(1 + i, n) / (Math.pow(1 + i, n) - 1) : v.loan / n; } },
+  { key: "inflation", title: "Inflation impact", blurb: "Future cost of today's money", icon: LineIcon, note: "Future cost",
+    fields: [{ k: "amount", label: "Today's cost (₹)", def: 100000 }, { k: "years", label: "Years", def: 10 }, { k: "rate", label: "Inflation % p.a.", def: 6 }],
+    compute: (v) => v.amount * Math.pow(1 + v.rate / 100, v.years) },
+  { key: "retire", title: "Retirement corpus", blurb: "Corpus you'll need to retire", icon: CalendarClock, note: "Corpus needed (25×)",
+    fields: [{ k: "expense", label: "Monthly expense now (₹)", def: 50000 }, { k: "years", label: "Years to retire", def: 25 }, { k: "infl", label: "Inflation % p.a.", def: 6 }],
+    compute: (v) => v.expense * 12 * Math.pow(1 + v.infl / 100, v.years) * 25 },
+];
+
 function ToolsPage({ mobile }) {
+  const [open, setOpen] = useState(null);
+  const tool = TOOLS.find((t) => t.key === open);
   return (
     <>
       <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Planning tools</div>
-      <div style={{ color: T.faint, fontSize: 12.5, marginBottom: 16 }}>Quick calculators — estimates only, not advice.</div>
-      <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr", gap: 12 }}>
-        <CalcCard title="SIP future value" note="Maturity value"
-          fields={[{ k: "monthly", label: "Monthly invest (₹)", def: 10000 }, { k: "years", label: "Years", def: 10 }, { k: "rate", label: "Return % p.a.", def: 12 }]}
-          compute={(v) => { const i = v.rate / 1200, n = v.years * 12; return i ? v.monthly * ((Math.pow(1 + i, n) - 1) / i) * (1 + i) : v.monthly * n; }} />
-        <CalcCard title="Goal — required SIP" note="Monthly SIP needed"
-          fields={[{ k: "target", label: "Target (₹)", def: 5000000 }, { k: "years", label: "Years", def: 15 }, { k: "rate", label: "Return % p.a.", def: 12 }]}
-          compute={(v) => { const i = v.rate / 1200, n = v.years * 12; const f = i ? ((Math.pow(1 + i, n) - 1) / i) * (1 + i) : n; return f ? v.target / f : 0; }} />
-        <CalcCard title="Lumpsum growth" note="Future value"
-          fields={[{ k: "amount", label: "Amount (₹)", def: 100000 }, { k: "years", label: "Years", def: 10 }, { k: "rate", label: "Return % p.a.", def: 12 }]}
-          compute={(v) => v.amount * Math.pow(1 + v.rate / 100, v.years)} />
-        <CalcCard title="Loan EMI" note="Monthly EMI"
-          fields={[{ k: "loan", label: "Loan (₹)", def: 2500000 }, { k: "years", label: "Years", def: 20 }, { k: "rate", label: "Interest % p.a.", def: 8.5 }]}
-          compute={(v) => { const i = v.rate / 1200, n = v.years * 12; return i ? v.loan * i * Math.pow(1 + i, n) / (Math.pow(1 + i, n) - 1) : v.loan / n; }} />
-        <CalcCard title="Inflation impact" note="Future cost"
-          fields={[{ k: "amount", label: "Today's cost (₹)", def: 100000 }, { k: "years", label: "Years", def: 10 }, { k: "rate", label: "Inflation % p.a.", def: 6 }]}
-          compute={(v) => v.amount * Math.pow(1 + v.rate / 100, v.years)} />
-        <CalcCard title="Retirement corpus" note="Corpus needed (25×)"
-          fields={[{ k: "expense", label: "Monthly expense now (₹)", def: 50000 }, { k: "years", label: "Years to retire", def: 25 }, { k: "infl", label: "Inflation % p.a.", def: 6 }]}
-          compute={(v) => v.expense * 12 * Math.pow(1 + v.infl / 100, v.years) * 25} />
+      <div style={{ color: T.faint, fontSize: 12.5, marginBottom: 16 }}>Tap a tool to open it. Estimates only, not advice.</div>
+      <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr 1fr" : "repeat(3,1fr)", gap: 12 }}>
+        {TOOLS.map((t) => (
+          <button key={t.key} onClick={() => setOpen(t.key)}
+            style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: 16, cursor: "pointer", textAlign: "left", fontFamily: T.sans, color: T.text, display: "flex", flexDirection: "column", gap: 8, minHeight: 116 }}>
+            <div style={{ width: 38, height: 38, borderRadius: 10, background: T.gold + "1F", display: "grid", placeItems: "center" }}>
+              <t.icon size={19} color={T.gold} />
+            </div>
+            <div style={{ fontSize: 13.5, fontWeight: 700, lineHeight: 1.25 }}>{t.title}</div>
+            <div style={{ fontSize: 11.5, color: T.faint, lineHeight: 1.4 }}>{t.blurb}</div>
+          </button>
+        ))}
       </div>
+      {tool && (
+        <div onClick={() => setOpen(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: mobile ? "flex-end" : "center", justifyContent: "center", zIndex: 60, padding: mobile ? 0 : 18 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: 420, maxWidth: "100%", background: T.surface, border: `1px solid ${T.border}`, borderRadius: mobile ? "16px 16px 0 0" : 16, padding: 22, fontFamily: T.sans }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ width: 34, height: 34, borderRadius: 9, background: T.gold + "1F", display: "grid", placeItems: "center" }}><tool.icon size={17} color={T.gold} /></div>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>{tool.title}</div>
+              </div>
+              <button onClick={() => setOpen(null)} style={iconBtn}><X size={18} /></button>
+            </div>
+            <CalcCard fields={tool.fields} compute={tool.compute} note={tool.note} />
+          </div>
+        </div>
+      )}
     </>
   );
 }
